@@ -1,8 +1,18 @@
 {
   "name": "@pact/pactd",
-  "version": "0.0.0",
-  "description": "pactd — the sidecar daemon: run the relationship layer alongside any agent platform. STUB.",
+  "version": "0.1.0",
+  "description": "pactd — the Pact sidecar daemon: run the agent-relationship layer alongside any agent platform over localhost HTTP.",
   "license": "Apache-2.0",
-  "private": true,
-  "type": "module"
+  "type": "module",
+  "bin": {
+    "pactd": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@pact/core": "0.1.0"
+  }
 }

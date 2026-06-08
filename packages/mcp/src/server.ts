@@ -3,14 +3,16 @@ import { z } from 'zod';
 
 import {
   DEFAULT_RELAYS,
+  ensureIdentity,
   formBond,
+  hasIdentity,
   listBonds,
+  loadIdentity,
+  loadSecret,
   pubkeyHexFromIdentity,
   type BondState,
   type RelayFilter,
 } from '@pact/core';
-
-import { ensureIdentity, hasIdentity, loadIdentity, loadSecret } from './identity.js';
 
 const BOND_STATES = [
   'proposed',
