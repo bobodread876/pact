@@ -110,5 +110,37 @@ export function createServer(): McpServer {
     async () => text(await daemon('GET', '/wallet')),
   );
 
+  server.tool(
+    'pact_create_invoice',
+    "Create a Lightning invoice on the daemon's wallet to RECEIVE sats. Returns a bolt11 invoice + payment hash.",
+    {
+      amountSats: z.number().int().positive().describe('Amount to receive, in sats.'),
+      description: z.string().optional().describe('Invoice memo.'),
+    },
+    async ({ amountSats, description }) => text(await daemon('POST', '/wallet/invoice', { amountSats, description })),
+  );
+
+  server.tool(
+    'pact_lookup_invoice',
+    'Check whether an invoice has been paid (by payment hash or bolt11).',
+    {
+      payment_hash: z.string().optional().describe('Payment hash to look up.'),
+      invoice: z.string().optional().describe('bolt11 invoice to look up.'),
+    },
+    async ({ payment_hash, invoice }) => {
+      const qs = new URLSearchParams();
+      if (payment_hash) qs.set('payment_hash', payment_hash);
+      if (invoice) qs.set('invoice', invoice);
+      return text(await daemon('GET', `/wallet/invoice?${qs}`));
+    },
+  );
+
+  server.tool(
+    'pact_pay_invoice',
+    "Pay a bolt11 Lightning invoice from the daemon's wallet. SPENDS sats (subject to your wallet's NWC budget).",
+    { invoice: z.string().describe('The bolt11 invoice to pay.') },
+    async ({ invoice }) => text(await daemon('POST', '/wallet/pay', { invoice })),
+  );
+
   return server;
 }

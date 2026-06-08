@@ -23,6 +23,9 @@ node packages/pactd/dist/index.js        # listens on 127.0.0.1:8787
 | `pact_list_bonds` | `GET /bonds` — resolve + verify (by bond / counterparty / author) |
 | `pact_verify_bond` | `GET /bonds/verify` — verify + mutual check (handles the 402 paid-verify flow via `payment_hash`) |
 | `pact_wallet` | `GET /wallet` — Lightning wallet status + balance |
+| `pact_create_invoice` | `POST /wallet/invoice` — create an invoice to receive sats |
+| `pact_lookup_invoice` | `GET /wallet/invoice` — check if an invoice is paid |
+| `pact_pay_invoice` | `POST /wallet/pay` — pay a bolt11 invoice (spends sats) |
 
 ## Install & register with Claude Code
 
