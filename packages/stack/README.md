@@ -5,15 +5,20 @@ One-command **sovereign self-host** of Pact: `pactd` + your **own** Nostr relay,
 ## Generic Docker (any machine / VPS)
 
 ```bash
-cd packages/stack
+git clone https://github.com/bobodread876/pact && cd pact/packages/stack
 cp .env.example .env          # optional: set PACT_NWC, PACT_VERIFY_PRICE_SATS
 docker compose up -d
 curl -s localhost:8787/healthz
 ```
 
-This builds the `pactd` image from source and runs it alongside a bundled `nostr-rs-relay`. `pactd` defaults `PACT_RELAYS` to the local relay (`ws://relay:8080`), so your bonds can live entirely on your machine. `pactd` is published to host **loopback only** (`127.0.0.1:8787`).
+This **pulls the published multi-arch `pactd` image** (no source build) and runs it alongside a bundled `nostr-rs-relay`. `pactd` defaults `PACT_RELAYS` to the local relay (`ws://relay:8080`), so your bonds can live entirely on your machine — verified: bonds publish to and resolve from the bundled relay only. `pactd` is exposed on host **loopback only**.
 
-Config (`.env`): `PACT_NWC` (Nostr Wallet Connect URI for non-custodial sats), `PACT_VERIFY_PRICE_SATS` (paid-verification price), `PACT_TOKEN` (bearer auth).
+Config (`.env`): `PACT_NWC` (Nostr Wallet Connect URI for non-custodial sats), `PACT_VERIFY_PRICE_SATS` (paid-verification price), `PACT_TOKEN` (bearer auth), `PACT_HOST_PORT` (host port, default 8787 — change it if 8787 is taken).
+
+Build `pactd` from source instead of pulling:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ## One-click: personal servers
 

@@ -1,11 +1,15 @@
 # pact-stack — one-command sovereign self-host.
 #
-#   cp .env.example .env   # optional: set PACT_NWC, PACT_VERIFY_PRICE_SATS
+#   cp .env.example .env        # optional: set PACT_NWC, PACT_VERIFY_PRICE_SATS
 #   docker compose up -d
+#   curl -s localhost:8787/healthz
 #
-# Brings up pactd + your OWN Nostr relay. pactd defaults its relays to the
-# bundled relay (PACT_RELAYS=ws://relay:8080), so your bonds can live entirely
-# on your box. pactd is exposed on host loopback only (127.0.0.1:8787).
+# Pulls the published multi-arch pactd image + runs your OWN Nostr relay. pactd
+# defaults its relays to the bundled relay (PACT_RELAYS=ws://relay:8080), so your
+# bonds can live entirely on your box. pactd is exposed on host loopback only.
+#
+# To build pactd from source instead of pulling:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 name: pact-stack
 
 services:
@@ -18,10 +22,7 @@ services:
     # internal only — reachable by pactd on the compose network as `relay`
 
   pactd:
-    build:
-      context: ../..
-      dockerfile: packages/stack/Dockerfile
-    image: pactd:local
+    image: ghcr.io/bobodread876/pactd:0.1.0
     restart: unless-stopped
     depends_on:
       - relay
@@ -33,7 +34,7 @@ services:
       PACT_VERIFY_PRICE_SATS: ${PACT_VERIFY_PRICE_SATS:-0}
       PACT_TOKEN: ${PACT_TOKEN:-}
     ports:
-      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:${PACT_HOST_PORT:-8787}:8787"
     volumes:
       - pact-data:/data
 
