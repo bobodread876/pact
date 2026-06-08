@@ -22,11 +22,20 @@ Config (`.env`): `PACT_NWC` (Nostr Wallet Connect URI for non-custodial sats), `
 | **Umbrel** | community-app-store ready | [`umbrel/`](umbrel) |
 | **Start9 (StartOS)** | package scaffold (needs `start-sdk` to build the `.s9pk`) | [`start9/`](start9) |
 
-Both pull a **published `pactd` image**. Publish it first (one-time):
+Both pull the **published `pactd` image** — now live, multi-arch (`linux/amd64` + `linux/arm64`):
 
+```
+ghcr.io/bobodread876/pactd:0.1.0
+ghcr.io/bobodread876/pactd:latest
+```
+
+⚠️ **Make the GHCR package public** so Umbrel/Start9 can pull it without credentials:
+`github.com/users/bobodread876/packages/container/pactd/settings` → *Danger Zone → Change visibility → Public*.
+
+To rebuild/republish later:
 ```bash
-docker build -f packages/stack/Dockerfile -t ghcr.io/bobodread876/pactd:0.1.0 .
-docker push ghcr.io/bobodread876/pactd:0.1.0   # needs a PAT with write:packages
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -f packages/stack/Dockerfile -t ghcr.io/bobodread876/pactd:<version> --push .
 ```
 
 Then follow the per-platform README in `umbrel/` or `start9/`.
