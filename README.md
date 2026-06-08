@@ -31,7 +31,7 @@ Early build. Thesis, architecture, and economic design drafted. Monorepo scaffol
 | Package | Status | What |
 |---|---|---|
 | [`@pact/core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve |
-| [`pact-mcp`](packages/mcp) | ✅ MVP | MCP server — bonds-as-tools for any MCP agent |
+| [`pact-mcp`](packages/mcp) | ✅ [on npm](https://www.npmjs.com/package/pact-mcp) | MCP server — bonds-as-tools for any MCP agent (thin client of `pactd`) |
 | [`@pact/pactd`](packages/pactd) | ✅ MVP | sidecar daemon — bonds over localhost HTTP for any platform/language |
 | [`@pact/sdk`](packages/sdk) | stub | in-process TS/Python SDK |
 | [`@pact/cli`](packages/cli) | stub | shell CLI |
