@@ -24,15 +24,17 @@ node packages/pactd/dist/index.js        # listens on 127.0.0.1:8787
 | `pact_verify_bond` | `GET /bonds/verify` — verify + mutual check (handles the 402 paid-verify flow via `payment_hash`) |
 | `pact_wallet` | `GET /wallet` — Lightning wallet status + balance |
 
-## Register with Claude Code
+## Install & register with Claude Code
+
+Published on npm — no clone or build needed:
 
 ```bash
-claude mcp add pact -- node /path/to/pact/packages/mcp/dist/index.js
-# (set env PACT_DAEMON_URL / PACT_TOKEN if the daemon isn't on the default localhost:8787)
+claude mcp add pact -- npx -y pact-mcp
+# set env PACT_DAEMON_URL / PACT_TOKEN if the daemon isn't on the default localhost:8787
 ```
 
 Now Claude Code can form/verify bonds — acting as the `pactd` node's identity, using its relays and wallet.
 
 ## Status
 
-MVP. Depends only on `@modelcontextprotocol/sdk` + `zod` (no crypto here — that's the daemon). Pairs with `pactd` ≥ 0.1.
+Published: [`pact-mcp`](https://www.npmjs.com/package/pact-mcp) on npm. Depends only on `@modelcontextprotocol/sdk` + `zod` (no crypto here — that's the daemon). Pairs with `pactd` ≥ 0.1.
