@@ -1,0 +1,8 @@
+{
+  "name": "@pact/sdk",
+  "version": "0.0.0",
+  "description": "Pact SDK (TypeScript) — embed bonds in your agent in-process. STUB.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module"
+}

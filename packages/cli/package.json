@@ -1,0 +1,8 @@
+{
+  "name": "@pact/cli",
+  "version": "0.0.0",
+  "description": "Pact CLI — drive bonds from the shell. STUB.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module"
+}
