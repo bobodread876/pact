@@ -21,6 +21,10 @@ Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only),
 | `GET /bonds` | `?bond_id= &counterparty= &author= &relay=` | resolve + verify bonds (defaults to self) |
 | `GET /bonds/verify` | `?bond_id= &relay=` | verify a bond + report whether it's mutual |
 | `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes (the heartbeat/inbox) |
+| `GET /wallet` | — | wallet connection status + balance (sats) |
+| `POST /wallet/invoice` | `{ amountSats, description? }` | create a Lightning invoice |
+| `GET /wallet/invoice` | `?payment_hash= \| ?invoice=` | look up an invoice (paid?) |
+| `POST /wallet/pay` | `{ invoice }` | pay a bolt11 invoice |
 
 ### Example
 
@@ -31,8 +35,28 @@ curl -s -XPOST localhost:8787/bonds -d '{"counterparty":"did:nostr:npub1…","bo
 curl -s "localhost:8787/bonds/verify?bond_id=urn:mate:demo"
 ```
 
+## Sats / Lightning (Nostr Wallet Connect)
+
+`pactd` moves sats **non-custodially** via [NWC (NIP-47)](https://github.com/nostr-protocol/nips/blob/master/47.md): it connects to **your own** Lightning wallet (lnflash / Alby / any NWC wallet) over Nostr and relays signed, NIP-04-encrypted requests to it. **pactd never holds funds or wallet keys.**
+
+```bash
+export PACT_NWC="nostr+walletconnect://<wallet-pubkey>?relay=wss://…&secret=<hex>"
+npx @pact/pactd
+curl -s localhost:8787/wallet                                   # status + balance
+curl -s -XPOST localhost:8787/wallet/invoice -d '{"amountSats":100,"description":"bond fee"}'
+curl -s -XPOST localhost:8787/wallet/pay -d '{"invoice":"lnbc…"}'
+```
+
+This is the rail every [ECONOMICS.md](../../ECONOMICS.md) market settles on:
+- **storage/relay fees** — pay relays to persist bond history
+- **verification fees** — charge to verify a bond (`/wallet/invoice` gates `/bonds/verify`)
+- **bonding / surety** — escrow sats against a bond (hold-invoice; future)
+- **agent-labor** — pay a bonded counterparty for work (resolve their Lightning address, `/wallet/pay`)
+
+This first cut ships the **rail + primitives** (invoice / pay / lookup / balance). The market mechanics above build on these.
+
 ## Sovereign notes
 
-Binds to loopback only. The key lives with the daemon (mode 600 under `~/.pact`), never in the agent process — process isolation. Point `?relay=` at your own relay for a fully sovereign setup. The sats/Lightning payment interface for the layered markets ([ECONOMICS.md](../../ECONOMICS.md)) will attach here.
+Binds to loopback only. The key lives with the daemon (mode 600 under `~/.pact`), never in the agent process — process isolation. Point `?relay=` at your own relay for a fully sovereign setup.
 
-Not yet implemented: remote signer (NIP-46), live relay subscriptions (the SSE stream currently polls).
+Not yet implemented: remote signer (NIP-46), live relay subscriptions (the SSE stream currently polls), NIP-44 NWC encryption (uses NIP-04), bonding/escrow + agent-labor market endpoints.
