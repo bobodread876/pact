@@ -1,13 +1,16 @@
-export * from './bond.js';
-export * from './nostr.js';
-export { normalizeBondDocument } from './normalize.js';
+// @pact/core — the agent-relationship runtime.
+//
+// Identity, bond signing, and transport come from the L1 protocol package
+// (@mate-protocol/core). This package adds the L2 runtime helpers on top.
+// (L2 depends on L1; L1 never depends on L2.)
 
-import { makeBondDocument, type BondState } from './bond.js';
+export * from '@mate-protocol/core';
+export { makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
+
 import {
   DEFAULT_RELAYS,
   buildBondHistoryEvent,
   buildBondStateEvent,
-  getTag,
   keypairFromSecret,
   publishEvent,
   resolveEvents,
@@ -15,7 +18,13 @@ import {
   type NostrEvent,
   type PublishResult,
   type RelayFilter,
-} from './nostr.js';
+} from '@mate-protocol/core';
+
+import { makeBondDocument, type BondState } from './bond.js';
+
+function getTag(event: NostrEvent, name: string): string | null {
+  return event.tags.find((entry) => entry[0] === name)?.[1] ?? null;
+}
 
 export interface FormBondInput {
   /** Counterparty identity (did:nostr / npub / hex). */
@@ -46,7 +55,7 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
   const createdAt = Math.floor(Date.now() / 1000);
 
-  const stateEvent = buildBondStateEvent(doc, secret, createdAt);
+  const stateEvent = buildBondStateEvent(doc, secret, { createdAt });
   const result: FormBondResult = {
     bondId: input.bondId,
     state: input.state,
@@ -58,7 +67,7 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
       doc,
       secret,
       { from: null, to: input.state, at: doc.bond.updated_at ?? new Date().toISOString() },
-      createdAt,
+      { createdAt },
     );
     result.historyEvent = { id: historyEvent.id, relays: await publishEvent(relays, historyEvent) };
   }
