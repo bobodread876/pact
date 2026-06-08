@@ -13,9 +13,12 @@ import {
   type RelayFilter,
 } from '@pact/core';
 
+import { lightningFromEnv } from './lightning.js';
+
 export const VERSION = '0.1.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
+const lightning = lightningFromEnv(); // null unless PACT_NWC is set
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -62,7 +65,7 @@ export function createDaemon() {
       const method = req.method ?? 'GET';
 
       // Health is unauthenticated.
-      if (path === '/healthz') return json(res, 200, { ok: true, version: VERSION });
+      if (path === '/healthz') return json(res, 200, { ok: true, version: VERSION, wallet: Boolean(lightning) });
 
       if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
 
@@ -115,6 +118,37 @@ export function createDaemon() {
           bonds.every((b) => b.signature_valid) &&
           bonds.some((b) => authors.has(b.counterparty ?? ''));
         return json(res, 200, { bond_id: bondId, relaysReached, count: bonds.length, mutual, bonds });
+      }
+
+      // --- wallet (non-custodial sats via NWC) ---
+      if (path === '/wallet' && method === 'GET') {
+        if (!lightning) return json(res, 200, { connected: false, hint: 'set PACT_NWC to a nostr+walletconnect:// URI' });
+        const info = await lightning.getInfo().catch((e) => ({ error: String(e) }));
+        const balanceSats = await lightning.getBalanceSats().catch(() => null);
+        return json(res, 200, { connected: true, balanceSats, info });
+      }
+      if (path === '/wallet/invoice' && method === 'POST') {
+        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        const body = await readJson(req);
+        const amountSats = Number(body.amountSats);
+        if (!Number.isFinite(amountSats) || amountSats <= 0) {
+          return json(res, 400, { error: 'amountSats (positive number) required' });
+        }
+        const description = typeof body.description === 'string' ? body.description : undefined;
+        return json(res, 200, await lightning.makeInvoice(amountSats, description));
+      }
+      if (path === '/wallet/invoice' && method === 'GET') {
+        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        const paymentHash = url.searchParams.get('payment_hash') ?? undefined;
+        const invoice = url.searchParams.get('invoice') ?? undefined;
+        if (!paymentHash && !invoice) return json(res, 400, { error: 'payment_hash or invoice query param required' });
+        return json(res, 200, await lightning.lookupInvoice({ paymentHash, invoice }));
+      }
+      if (path === '/wallet/pay' && method === 'POST') {
+        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        const body = await readJson(req);
+        if (typeof body.invoice !== 'string') return json(res, 400, { error: 'invoice (bolt11 string) required' });
+        return json(res, 200, await lightning.payInvoice(body.invoice));
       }
 
       // --- event stream (inbox / heartbeat) ---
