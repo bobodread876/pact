@@ -20,6 +20,10 @@ export const VERSION = '0.1.0';
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
 const lightning = lightningFromEnv(); // null unless PACT_NWC is set
 
+// Paid-verification market (opt-in): price in sats to verify a bond. 0 = free.
+// Only enforced when a wallet is connected (otherwise there's no way to collect).
+const VERIFY_PRICE_SATS = Math.max(0, Math.floor(Number(process.env.PACT_VERIFY_PRICE_SATS) || 0));
+
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body, null, 2));
@@ -65,7 +69,14 @@ export function createDaemon() {
       const method = req.method ?? 'GET';
 
       // Health is unauthenticated.
-      if (path === '/healthz') return json(res, 200, { ok: true, version: VERSION, wallet: Boolean(lightning) });
+      if (path === '/healthz') {
+        return json(res, 200, {
+          ok: true,
+          version: VERSION,
+          wallet: Boolean(lightning),
+          verifyPriceSats: VERIFY_PRICE_SATS || undefined,
+        });
+      }
 
       if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
 
@@ -111,13 +122,44 @@ export function createDaemon() {
       if (path === '/bonds/verify' && method === 'GET') {
         const bondId = url.searchParams.get('bond_id');
         if (!bondId) return json(res, 400, { error: 'bond_id query param required' });
+
+        // Paid-verification market (L402-style). Active only when a price is set
+        // AND a wallet is connected to collect to. First request → 402 + invoice;
+        // retry with ?payment_hash=<hash> once paid.
+        const paywalled = VERIFY_PRICE_SATS > 0 && lightning;
+        if (paywalled) {
+          const paymentHash = url.searchParams.get('payment_hash');
+          if (!paymentHash) {
+            const inv = await lightning.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
+            return json(res, 402, {
+              error: 'payment required',
+              price_sats: VERIFY_PRICE_SATS,
+              invoice: inv.invoice,
+              payment_hash: inv.paymentHash,
+              hint: 'pay the invoice, then retry with &payment_hash=<hash>',
+            });
+          }
+          const look = await lightning.lookupInvoice({ paymentHash });
+          if (!look.paid) {
+            return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+          }
+        }
+
         const { relaysReached, bonds } = await listBonds({ '#d': [bondId] }, relaysFrom(url));
         const authors = new Set(bonds.map((b) => b.author));
         const mutual =
           bonds.length >= 2 &&
           bonds.every((b) => b.signature_valid) &&
           bonds.some((b) => authors.has(b.counterparty ?? ''));
-        return json(res, 200, { bond_id: bondId, relaysReached, count: bonds.length, mutual, bonds });
+        return json(res, 200, {
+          bond_id: bondId,
+          paid: paywalled ? true : undefined,
+          price_sats: paywalled ? VERIFY_PRICE_SATS : undefined,
+          relaysReached,
+          count: bonds.length,
+          mutual,
+          bonds,
+        });
       }
 
       // --- wallet (non-custodial sats via NWC) ---

@@ -8,7 +8,7 @@ The Pact **sidecar daemon** — the universal adapter. A local long-running proc
 npx @pact/pactd            # listens on http://127.0.0.1:8787
 ```
 
-Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only), `PACT_TOKEN` (optional bearer token), `PACT_HOME` (key dir, default `~/.pact`).
+Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only), `PACT_TOKEN` (optional bearer token), `PACT_HOME` (key dir, default `~/.pact`), `PACT_NWC` (wallet-connect URI), `PACT_VERIFY_PRICE_SATS` (paid-verification price; default 0 = free).
 
 ## HTTP API
 
@@ -19,7 +19,7 @@ Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only),
 | `POST /identity` | `{ force? }` | create the local identity |
 | `POST /bonds` | `{ counterparty, bondId, state?, kind?, relays?, history? }` | assemble + sign + publish a bond |
 | `GET /bonds` | `?bond_id= &counterparty= &author= &relay=` | resolve + verify bonds (defaults to self) |
-| `GET /bonds/verify` | `?bond_id= &relay=` | verify a bond + report whether it's mutual |
+| `GET /bonds/verify` | `?bond_id= &relay= &payment_hash=` | verify a bond + mutual check (returns **402 + invoice** if `PACT_VERIFY_PRICE_SATS` is set + wallet connected) |
 | `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes (the heartbeat/inbox) |
 | `GET /wallet` | — | wallet connection status + balance (sats) |
 | `POST /wallet/invoice` | `{ amountSats, description? }` | create a Lightning invoice |
@@ -55,7 +55,21 @@ This is the rail every [ECONOMICS.md](../../ECONOMICS.md) market settles on:
 - **bonding / surety** — escrow sats against a bond (hold-invoice; future)
 - **agent-labor** — pay a bonded counterparty for work (resolve their Lightning address, `/wallet/pay`)
 
-This first cut ships the **rail + primitives** (invoice / pay / lookup / balance). The market mechanics above build on these.
+### Paid verification (the first live market)
+
+`GET /bonds/verify` becomes a **paid endpoint** when `PACT_VERIFY_PRICE_SATS > 0` and a wallet is connected — the verifier earns sats for the work ([L402](https://docs.lightning.engineering/the-lightning-network/l402)-style HTTP 402 flow). Free (unchanged) otherwise.
+
+```
+GET /bonds/verify?bond_id=X                      → 402 { invoice, payment_hash, price_sats }
+# (client pays the invoice with their wallet)
+GET /bonds/verify?bond_id=X&payment_hash=<hash>  → 200 { paid:true, mutual, bonds, … }
+```
+
+pactd issues the invoice on the operator's own wallet and gates the result on `lookup_invoice`. Run a verifier node, set a price, earn sats — the flywheel's first turn.
+
+*(MVP limitation: the paid `payment_hash` is not yet bound to a specific `bond_id` and could be reused; a real deployment scopes it via L402 macaroon caveats.)*
+
+This first cut ships the **rail + primitives** (invoice / pay / lookup / balance) plus **paid verification**. The other markets above build on these.
 
 ## Sovereign notes
 
