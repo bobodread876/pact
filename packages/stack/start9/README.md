@@ -4,7 +4,7 @@ One-click install of `pactd` on [Start9 / StartOS](https://start9.com). Unlike U
 
 ## What the package wraps
 
-- **Image:** `ghcr.io/bobodread876/pactd:0.1.0` (publish first — see `../README.md`).
+- **Image:** `ghcr.io/bobodread876/pactd:latest` (publish first — see `../README.md`).
 - **Main process:** `node packages/pactd/dist/index.js`, listening on `0.0.0.0:8787`.
 - **Health check:** HTTP `GET /healthz` → `{ ok: true }`.
 - **Persistence:** the `/data` volume (key + local bond store).

@@ -35,12 +35,23 @@ export interface Payment {
   feesPaidSats?: number;
 }
 
+export interface WalletTransaction {
+  type?: string;
+  amountSats: number;
+  feesPaidSats: number;
+  description?: string;
+  paymentHash?: string;
+  settledAt?: number | null;
+  createdAt?: number;
+}
+
 export interface LightningProvider {
   getInfo(): Promise<Record<string, unknown>>;
   getBalanceSats(): Promise<number>;
   makeInvoice(amountSats: number, description?: string): Promise<Invoice>;
   payInvoice(invoice: string): Promise<Payment>;
   lookupInvoice(opts: { invoice?: string; paymentHash?: string }): Promise<{ paid: boolean } & Record<string, unknown>>;
+  listTransactions(opts?: { limit?: number; unpaid?: boolean }): Promise<WalletTransaction[]>;
 }
 
 interface NwcConnection {
@@ -89,6 +100,20 @@ export class NwcProvider implements LightningProvider {
     const params = opts.paymentHash ? { payment_hash: opts.paymentHash } : { invoice: opts.invoice };
     const r = await this.request('lookup_invoice', params);
     return { paid: Boolean(r.preimage) || r.settled_at != null || r.paid === true, ...r };
+  }
+
+  async listTransactions(opts: { limit?: number; unpaid?: boolean } = {}): Promise<WalletTransaction[]> {
+    const r = await this.request('list_transactions', { limit: opts.limit ?? 20, unpaid: opts.unpaid ?? false });
+    const txs = Array.isArray(r.transactions) ? (r.transactions as Record<string, any>[]) : [];
+    return txs.map((t) => ({
+      type: t.type,
+      amountSats: Math.floor(Number(t.amount) / 1000) || 0,
+      feesPaidSats: Math.floor(Number(t.fees_paid) / 1000) || 0,
+      description: t.description || undefined,
+      paymentHash: t.payment_hash || undefined,
+      settledAt: t.settled_at ?? null,
+      createdAt: t.created_at,
+    }));
   }
 
   private async request(method: string, params: unknown): Promise<Record<string, any>> {

@@ -142,5 +142,21 @@ export function createServer(): McpServer {
     async ({ invoice }) => text(await daemon('POST', '/wallet/pay', { invoice })),
   );
 
+  server.tool(
+    'pact_list_transactions',
+    "List the wallet's recent Lightning transactions (received + sent). The reliable way to audit payments — unlike get_balance, this reflects actual settlements.",
+    {
+      limit: z.number().int().positive().optional().describe('Max transactions to return (default 20).'),
+      unpaid: z.boolean().optional().describe('Include unpaid/pending invoices.'),
+    },
+    async ({ limit, unpaid }) => {
+      const qs = new URLSearchParams();
+      if (limit) qs.set('limit', String(limit));
+      if (unpaid) qs.set('unpaid', 'true');
+      const suffix = qs.toString() ? `?${qs}` : '';
+      return text(await daemon('GET', `/wallet/transactions${suffix}`));
+    },
+  );
+
   return server;
 }

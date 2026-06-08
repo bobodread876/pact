@@ -22,7 +22,7 @@ services:
     # internal only — reachable by pactd on the compose network as `relay`
 
   pactd:
-    image: ghcr.io/bobodread876/pactd:0.1.0
+    image: ghcr.io/bobodread876/pactd:latest
     restart: unless-stopped
     depends_on:
       - relay

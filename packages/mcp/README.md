@@ -26,6 +26,7 @@ node packages/pactd/dist/index.js        # listens on 127.0.0.1:8787
 | `pact_create_invoice` | `POST /wallet/invoice` — create an invoice to receive sats |
 | `pact_lookup_invoice` | `GET /wallet/invoice` — check if an invoice is paid |
 | `pact_pay_invoice` | `POST /wallet/pay` — pay a bolt11 invoice (spends sats) |
+| `pact_list_transactions` | `GET /wallet/transactions` — recent payments (reliable audit; reflects settlements) |
 
 ## Install & register with Claude Code
 
