@@ -99,6 +99,10 @@ Why hybrid+usage is right for this category: usage-based infra posts **median NR
 - **Enterprise / org** — audit, compliance, private relays, SSO, SLAs.
 - **Open-core** — protocol + SDK free to drive adoption; revenue at hosting, verification, matching.
 
+### The deeper model: sats-native layered markets (the flywheel)
+
+Hybrid SaaS above is *one* capture surface. The core economic design is **incentive markets at every layer** — storage/relay, verification, matching, **bonding (staked surety)**, agent-labor, and protocol-dev — each a permissionless, **sats-native** market (Bitcoin over Lightning / lnflash, **no token**) where self-interested action produces the work that layer needs. Following Bitcoin: the markets *are* the flywheel. Pact captures protocol fees / take-rate and runs premier nodes — as a steward/participant, **not a gatekeeper** — so revenue scales with **network activity, not seat count**, and survives even as a minority participant. **See [ECONOMICS.md](ECONOMICS.md) — a load-bearing design pillar, not a monetization afterthought.**
+
 **Honest sizing.** The *initial* TAM is the crypto/Nostr-native agent segment — smaller than the headline "1.3B agents by 2028." That's deliberate: a defensible beachhead beats a contested ocean. The expansion path (interop fabric → broader agent economy) is real but earned, not assumed.
 
 ---

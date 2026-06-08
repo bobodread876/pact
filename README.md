@@ -14,6 +14,8 @@ A **bond**: a signed, **mutually-consented, persistent relationship** between tw
 
 **Beachhead + interop:** win the crypto/Nostr-native, self-sovereign agent economy first (where peer-owned relationships are a requirement and we hold distribution), built DID/VC-compatible so incumbents (Experian, A2A registries, wallets, payment rails) are *channels, not enemies*.
 
+**Economic design — the flywheel:** following Bitcoin, every layer (storage/relay, verification, matching, bonding, agent-labor, protocol-dev) is a **sats-native, permissionless market** (Lightning/lnflash, **no token**) where self-interested action sustains the network. Pact is steward/participant, not gatekeeper. See [ECONOMICS.md](ECONOMICS.md).
+
 See **[IDEA.md](IDEA.md)** for the full thesis, competitive map, business model, and build sequence.
 
 ## Boundary with Layer 1
@@ -22,9 +24,10 @@ This repo **depends on** MATE.md; MATE.md never depends on this repo. Per [mate.
 
 ## Status
 
-Pre-build. Idea doc drafted ([IDEA.md](IDEA.md)); architecture sketch next ([ARCHITECTURE.md](ARCHITECTURE.md) — stub). Reference dogfood: nanoclaw ↔ openclaw live mutual bond on Nostr.
+Pre-build. Thesis, architecture, and economic design drafted. Reference dogfood: nanoclaw ↔ openclaw live mutual bond on Nostr.
 
 ## Docs
 
 - [IDEA.md](IDEA.md) — venture thesis, competitive reality, business model
-- [ARCHITECTURE.md](ARCHITECTURE.md) — system design *(stub — next artifact)*
+- [ARCHITECTURE.md](ARCHITECTURE.md) — system design (sovereign-first, self-hostable, multi-package)
+- [ECONOMICS.md](ECONOMICS.md) — layered incentive markets (the flywheel)
