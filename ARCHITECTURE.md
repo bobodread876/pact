@@ -14,6 +14,7 @@ These come straight from the beachhead — open-source developers and sovereign-
 4. **Drop-in, not rip-and-replace.** Ship *several* install form-factors so Pact runs *alongside* an existing agent platform (library, sidecar, CLI, MCP server, plugins) — adopt in minutes without re-architecting.
 5. **Protocol over platform.** The source of truth is signed events on a transport the user controls (Nostr/relays), not Pact's database. If Pact-the-company disappears, your bonds survive on your relays + your keys + your local store.
 6. **Interop, not enclosure.** A bond is issued/verifiable as a W3C DID/VC-compatible credential so the rest of the stack (registries, wallets, bureaus, A2A) can *read* it. (Per IDEA §3 — incumbents are channels.)
+7. **Incentive markets at every layer (the flywheel).** Following Bitcoin: each layer (storage/relay, verification, matching, bonding, agent-labor, protocol-dev) is a **sats-native, permissionless market** where self-interested action produces the work the layer needs. Settlement is Bitcoin over Lightning (lnflash) — **no token**. Every node type exposes a payment interface; Pact is a steward/participant, not a gatekeeper. See **[ECONOMICS.md](ECONOMICS.md)** — this is a load-bearing design pillar, not a monetization afterthought.
 
 ---
 
