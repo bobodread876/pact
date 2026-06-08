@@ -35,6 +35,15 @@ claude mcp add pact -- npx -y pact-mcp
 
 Now Claude Code can form/verify bonds — acting as the `pactd` node's identity, using its relays and wallet.
 
+**If the MCP server shows "Connection closed" on first add:** that's usually the first-run `npx` download exceeding the MCP startup timeout. Either warm it once (`npx -y pact-mcp` in a terminal → wait for `pact-mcp: ready (stdio)` → Ctrl-C, then reconnect), or install globally for an instant spawn:
+
+```bash
+npm i -g pact-mcp
+claude mcp add pact -- pact-mcp
+```
+
+Requires **Node ≥ 18**.
+
 ## Status
 
 Published: [`pact-mcp`](https://www.npmjs.com/package/pact-mcp) on npm. Depends only on `@modelcontextprotocol/sdk` + `zod` (no crypto here — that's the daemon). Pairs with `pactd` ≥ 0.1.
