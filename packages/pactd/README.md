@@ -59,10 +59,15 @@ This is the rail every [ECONOMICS.md](../../ECONOMICS.md) market settles on:
 
 `GET /bonds/verify` becomes a **paid endpoint** when `PACT_VERIFY_PRICE_SATS > 0` and a wallet is connected — the verifier earns sats for the work ([L402](https://docs.lightning.engineering/the-lightning-network/l402)-style HTTP 402 flow). Free (unchanged) otherwise.
 
-```
-GET /bonds/verify?bond_id=X                      → 402 { invoice, payment_hash, price_sats }
-# (client pays the invoice with their wallet)
-GET /bonds/verify?bond_id=X&payment_hash=<hash>  → 200 { paid:true, mutual, bonds, … }
+```bash
+# 1) request → 402 with an invoice
+curl -si "localhost:8787/bonds/verify?bond_id=X"
+#    → 402 { invoice, payment_hash, price_sats }
+
+# 2) pay the invoice with your wallet, then retry — QUOTE THE WHOLE URL
+#    (an unquoted & backgrounds the command and drops payment_hash)
+curl -si "localhost:8787/bonds/verify?bond_id=X&payment_hash=<hash>"
+#    → 200 { paid:true, mutual, bonds, … }
 ```
 
 pactd issues the invoice on the operator's own wallet and gates the result on `lookup_invoice`. Run a verifier node, set a price, earn sats — the flywheel's first turn.
