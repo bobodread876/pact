@@ -1,6 +1,6 @@
 # Layer 2 Venture — Idea Document
 
-*Working title: TBD (name options in §12). Repo will live under `bobodread876`.*
+*Name: **Pact**. Repo: `bobodread876/pact` (private).*
 *Built on [MATE.md](https://github.com/bobodread876/mate.md) (Layer 1, protocol) + [NIP-BD](https://github.com/bobodread876/nips/tree/nip-agent-bonds) (Nostr transport). Status: draft v0.2 — re-cut after competitive research, 2026-06-07.*
 
 > **What changed in v0.2:** the original "unclaimed relationship layer" thesis was wrong — the space is crowded (Experian, agent.ai, A2A registries, Catena, mem0, the W3C DID/VC race). This version drops the "we're first" framing and commits to a **beachhead-plus-interop** strategy: own one defensible niche, stay interoperable with everyone else.

@@ -1,6 +1,8 @@
-# Layer 2 — Agent Relationship Layer *(name TBD)*
+# Pact — the agent relationship layer
 
 **The open, agent-owned relationship layer for the self-sovereign agent economy — interoperable with everything else.**
+
+> A *pact* is a mutual, binding agreement between two parties — exactly the primitive this layer makes portable and verifiable for agents.
 
 This is the **Layer 2 venture** built on the [MATE.md](https://github.com/bobodread876/mate.md) protocol (Layer 1) and its [NIP-BD](https://github.com/bobodread876/nips/tree/nip-agent-bonds) Nostr transport. Where MATE.md defines *mechanism* (the bond format, state machine, proofs, transport), this layer is the *runtime, product, and business* on top.
 
