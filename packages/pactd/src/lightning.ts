@@ -1,9 +1,13 @@
 // Non-custodial sats interface for pactd.
 //
 // Default provider is Nostr Wallet Connect (NIP-47): pactd talks to the USER'S
-// OWN Lightning wallet (lnflash / Alby / any NWC wallet) over Nostr. pactd never
-// holds funds or wallet keys — it only relays signed, encrypted requests to the
-// wallet service the user authorized via a `nostr+walletconnect://` URI.
+// OWN Lightning wallet over Nostr. pactd never holds funds or wallet keys — it
+// only relays signed, encrypted requests to the wallet service the user
+// authorized via a `nostr+walletconnect://` URI.
+//
+// Works with any NWC-compatible wallet (Alby, Coinos, Primal, …). NOTE: lnflash
+// does NOT implement NWC yet, so it is not usable through this provider; a
+// direct lnflash provider (via its API) is a planned addition.
 //
 // This is the rail every ECONOMICS.md market settles on (relay fees, verification
 // fees, bonding/escrow, agent-labor payments). This first cut ships the rail +

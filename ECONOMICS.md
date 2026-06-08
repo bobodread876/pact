@@ -117,7 +117,7 @@ The point: Pact's revenue scales with **network activity**, not seat count — a
 
 ## 6. Design implications (feeding back into ARCHITECTURE)
 
-- **Lightning is a first-class component**, not an add-on: every node type (relay, verifier, matcher) exposes a payment interface; the SDK/daemon can pay and get paid in sats (LN/lnflash, ideally non-custodial).
+- **Lightning is a first-class component**, not an add-on: every node type (relay, verifier, matcher) exposes a payment interface; the SDK/daemon can pay and get paid in sats non-custodially. (Today `pactd` settles via NWC/NIP-47 — Alby-compatible wallets such as Alby, Coinos, Primal; a **direct lnflash provider is planned**, since lnflash does not yet support NWC.)
 - **Bonds carry optional economic references** — escrow/collateral/stake pointers in the bond's `extensions`, settled and slashed via Lightning/contracts off the critical path of L1 (which stays pure mechanism).
 - **Each market is an open protocol** (relay-fee, verify-fee, match-fee, bonding) so participation is permissionless and federatable — never a Pact-only API.
 - **No protocol change to L1.** All incentive mechanics live in L2 and in `extensions`; MATE.md stays a neutral, fee-agnostic standard.
