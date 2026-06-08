@@ -14,7 +14,7 @@ pact-pactd/
 
 ## To publish & install
 
-1. **Image:** already published (multi-arch) at `ghcr.io/bobodread876/pactd:0.1.0`. **Make it public** at `github.com/users/bobodread876/packages/container/pactd/settings` → *Change visibility → Public* (required so Umbrel can pull it).
+1. **Image:** already published (multi-arch) at `ghcr.io/bobodread876/pactd:latest`. **Make it public** at `github.com/users/bobodread876/packages/container/pactd/settings` → *Change visibility → Public* (required so Umbrel can pull it).
 2. **Create the store repo:** Umbrel community app stores must have `umbrel-app-store.yml` at the **repo root**. Copy the contents of this `umbrel/` directory into a dedicated public repo (e.g. `bobodread876/pact-umbrel-store`).
 3. **Add it in umbrelOS:** App Store → **⋯** → *Community App Stores* → paste the repo URL → install **Pact**.
 

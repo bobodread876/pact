@@ -30,8 +30,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 Both pull the **published `pactd` image** — now live, multi-arch (`linux/amd64` + `linux/arm64`):
 
 ```
-ghcr.io/bobodread876/pactd:0.1.0
-ghcr.io/bobodread876/pactd:latest
+ghcr.io/bobodread876/pactd:latest   # tracks newest; also tagged :0.2.0
 ```
 
 ⚠️ **Make the GHCR package public** so Umbrel/Start9 can pull it without credentials:

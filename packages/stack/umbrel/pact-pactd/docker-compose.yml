@@ -7,7 +7,7 @@ services:
       APP_PORT: 8787
 
   web:
-    image: ghcr.io/bobodread876/pactd:0.1.0
+    image: ghcr.io/bobodread876/pactd:latest
     restart: on-failure
     environment:
       PACT_HOST: 0.0.0.0

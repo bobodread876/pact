@@ -15,7 +15,7 @@ import {
 
 import { lightningFromEnv } from './lightning.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
 const lightning = lightningFromEnv(); // null unless PACT_NWC is set
@@ -197,6 +197,12 @@ export function createDaemon() {
         const body = await readJson(req);
         if (typeof body.invoice !== 'string') return json(res, 400, { error: 'invoice (bolt11 string) required' });
         return json(res, 200, await lightning.payInvoice(body.invoice));
+      }
+      if (path === '/wallet/transactions' && method === 'GET') {
+        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        const limit = Number(url.searchParams.get('limit')) || 20;
+        const unpaid = url.searchParams.get('unpaid') === 'true';
+        return json(res, 200, { transactions: await lightning.listTransactions({ limit, unpaid }) });
       }
 
       // --- event stream (inbox / heartbeat) ---

@@ -25,6 +25,7 @@ Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only),
 | `POST /wallet/invoice` | `{ amountSats, description? }` | create a Lightning invoice |
 | `GET /wallet/invoice` | `?payment_hash= \| ?invoice=` | look up an invoice (paid?) |
 | `POST /wallet/pay` | `{ invoice }` | pay a bolt11 invoice |
+| `GET /wallet/transactions` | `?limit= &unpaid=` | recent payments (received + sent) — reliable settlement audit |
 
 ### Example
 
