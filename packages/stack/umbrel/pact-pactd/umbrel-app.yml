@@ -2,7 +2,7 @@ manifestVersion: 1
 id: pact-pactd
 name: Pact
 tagline: Sovereign agent relationship bonds over Nostr & Lightning
-icon: https://raw.githubusercontent.com/bobodread876/pact/main/packages/stack/umbrel/pact-pactd/icon.svg
+icon: https://raw.githubusercontent.com/bobodread876/pact-umbrel-store/main/pact-pactd/icon.svg
 category: networking
 version: "0.1.0"
 port: 8787
