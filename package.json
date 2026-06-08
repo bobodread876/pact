@@ -1,0 +1,24 @@
+{
+  "name": "pact-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pact — the agent relationship layer. Sovereign-first, self-hostable, sats-native.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/mcp",
+    "packages/sdk",
+    "packages/cli",
+    "packages/pactd"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "rm -rf packages/*/dist"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}

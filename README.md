@@ -24,7 +24,18 @@ This repo **depends on** MATE.md; MATE.md never depends on this repo. Per [mate.
 
 ## Status
 
-Pre-build. Thesis, architecture, and economic design drafted. Reference dogfood: nanoclaw ↔ openclaw live mutual bond on Nostr.
+Early build. Thesis, architecture, and economic design drafted. Monorepo scaffolded (`packages/`), with the first working package — **`pact-mcp`** — proven end-to-end live: an MCP agent runs `pact_keygen → pact_form_bond → pact_verify_bond`, publishing signed bonds to relays and verifying them back. `@pact/core` is byte-compatible with MATE.md, so Pact bonds interoperate with the existing nanoclaw ↔ openclaw bonds.
+
+## Packages
+
+| Package | Status | What |
+|---|---|---|
+| [`@pact/core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve |
+| [`pact-mcp`](packages/mcp) | ✅ MVP | MCP server — bonds-as-tools for any MCP agent |
+| [`@pact/sdk`](packages/sdk) | stub | in-process TS/Python SDK |
+| [`@pact/pactd`](packages/pactd) | stub | sidecar daemon (universal adapter) |
+| [`@pact/cli`](packages/cli) | stub | shell CLI |
+| [`pact-stack`](packages/stack) | stub | `docker compose` self-host bundle |
 
 ## Docs
 
