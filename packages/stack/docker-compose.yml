@@ -1,0 +1,42 @@
+# pact-stack — one-command sovereign self-host.
+#
+#   cp .env.example .env   # optional: set PACT_NWC, PACT_VERIFY_PRICE_SATS
+#   docker compose up -d
+#
+# Brings up pactd + your OWN Nostr relay. pactd defaults its relays to the
+# bundled relay (PACT_RELAYS=ws://relay:8080), so your bonds can live entirely
+# on your box. pactd is exposed on host loopback only (127.0.0.1:8787).
+name: pact-stack
+
+services:
+  relay:
+    image: scsibug/nostr-rs-relay:latest
+    restart: unless-stopped
+    volumes:
+      - relay-data:/usr/src/app/db
+      - ./relay/config.toml:/usr/src/app/config.toml:ro
+    # internal only — reachable by pactd on the compose network as `relay`
+
+  pactd:
+    build:
+      context: ../..
+      dockerfile: packages/stack/Dockerfile
+    image: pactd:local
+    restart: unless-stopped
+    depends_on:
+      - relay
+    environment:
+      PACT_HOST: 0.0.0.0
+      PACT_PORT: "8787"
+      PACT_RELAYS: ws://relay:8080
+      PACT_NWC: ${PACT_NWC:-}
+      PACT_VERIFY_PRICE_SATS: ${PACT_VERIFY_PRICE_SATS:-0}
+      PACT_TOKEN: ${PACT_TOKEN:-}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - pact-data:/data
+
+volumes:
+  relay-data:
+  pact-data:

@@ -1,5 +1,36 @@
-# pact-stack *(stub)*
+# pact-stack
 
-One-command self-host bundle — `docker compose up` brings up `pactd` + a Nostr relay (strfry / nostr-rs-relay) + an optional local dashboard, for sovereign users who want the whole stack on their own infra.
+One-command **sovereign self-host** of Pact: `pactd` + your **own** Nostr relay, on your own box. The same bundle is wrapped for one-click installation on personal-server platforms (**Umbrel**, **Start9**).
 
-Not yet implemented — see [ARCHITECTURE.md §4 + §7](../../ARCHITECTURE.md).
+## Generic Docker (any machine / VPS)
+
+```bash
+cd packages/stack
+cp .env.example .env          # optional: set PACT_NWC, PACT_VERIFY_PRICE_SATS
+docker compose up -d
+curl -s localhost:8787/healthz
+```
+
+This builds the `pactd` image from source and runs it alongside a bundled `nostr-rs-relay`. `pactd` defaults `PACT_RELAYS` to the local relay (`ws://relay:8080`), so your bonds can live entirely on your machine. `pactd` is published to host **loopback only** (`127.0.0.1:8787`).
+
+Config (`.env`): `PACT_NWC` (Nostr Wallet Connect URI for non-custodial sats), `PACT_VERIFY_PRICE_SATS` (paid-verification price), `PACT_TOKEN` (bearer auth).
+
+## One-click: personal servers
+
+| Platform | Status | Path |
+|---|---|---|
+| **Umbrel** | community-app-store ready | [`umbrel/`](umbrel) |
+| **Start9 (StartOS)** | package scaffold (needs `start-sdk` to build the `.s9pk`) | [`start9/`](start9) |
+
+Both pull a **published `pactd` image**. Publish it first (one-time):
+
+```bash
+docker build -f packages/stack/Dockerfile -t ghcr.io/bobodread876/pactd:0.1.0 .
+docker push ghcr.io/bobodread876/pactd:0.1.0   # needs a PAT with write:packages
+```
+
+Then follow the per-platform README in `umbrel/` or `start9/`.
+
+## Verified
+
+`docker build` + `docker run` of the image: builds clean, boots, serves `/healthz`. `docker compose config`: valid. (Live publish of the image + app-store submission are follow-ups.)
