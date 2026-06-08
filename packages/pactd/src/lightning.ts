@@ -17,6 +17,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import * as secp256k1 from '@noble/secp256k1';
+import { bech32 } from '@scure/base';
 
 import { finalizeEvent, keypairFromSecret, type NostrEvent, type UnsignedEvent } from '@pact/core';
 
@@ -31,8 +32,13 @@ export interface Invoice {
 }
 
 export interface Payment {
+  /** settled = confirmed paid; pending = submitted but unconfirmed (do not retry); failed = rejected, no funds moved. */
+  status: 'settled' | 'pending' | 'failed';
   preimage?: string;
   feesPaidSats?: number;
+  paymentHash?: string;
+  error?: string;
+  message?: string;
 }
 
 export interface WalletTransaction {
@@ -41,6 +47,7 @@ export interface WalletTransaction {
   feesPaidSats: number;
   description?: string;
   paymentHash?: string;
+  preimage?: string;
   settledAt?: number | null;
   createdAt?: number;
 }
@@ -89,11 +96,69 @@ export class NwcProvider implements LightningProvider {
   }
 
   async payInvoice(invoice: string): Promise<Payment> {
-    const r = await this.request('pay_invoice', { invoice });
+    const paymentHash = paymentHashFromInvoice(invoice) ?? undefined;
+    let nwcError: string | undefined;
+
+    try {
+      const r = await this.request('pay_invoice', { invoice });
+      if (r.preimage) {
+        return {
+          status: 'settled',
+          preimage: String(r.preimage),
+          feesPaidSats: r.fees_paid != null ? Math.floor(Number(r.fees_paid) / 1000) : undefined,
+          paymentHash,
+        };
+      }
+      // Responded without a preimage → in-flight/unknown; poll below.
+    } catch (error) {
+      nwcError = error instanceof Error ? error.message : String(error);
+      // Definitive failures: no funds moved, safe to report as failed.
+      if (/INSUFFICIENT_BALANCE|QUOTA_EXCEEDED|UNAUTHORIZED|NOT_IMPLEMENTED|RESTRICTED|RATE_LIMITED|PAYMENT_FAILED/.test(nwcError)) {
+        return { status: 'failed', error: nwcError, paymentHash };
+      }
+      // INTERNAL / OTHER / "no preimage" → ambiguous (may be in-flight); poll below.
+    }
+
+    // Poll the ledger to discover the TRUE settlement status before reporting.
+    if (paymentHash) {
+      const settled = await this.pollSettlement(paymentHash);
+      if (settled) {
+        return {
+          status: 'settled',
+          preimage: settled.preimage,
+          feesPaidSats: settled.feesPaidSats,
+          paymentHash,
+        };
+      }
+    }
+
     return {
-      preimage: r.preimage ? String(r.preimage) : undefined,
-      feesPaidSats: r.fees_paid != null ? Math.floor(Number(r.fees_paid) / 1000) : undefined,
+      status: 'pending',
+      paymentHash,
+      error: nwcError,
+      message:
+        'Payment submitted but settlement is UNCONFIRMED — the wallet returned no preimage and it has not settled yet. ' +
+        'DO NOT retry (re-paying may double-spend). Check pact_list_transactions or your wallet for the final status.',
     };
+  }
+
+  /** Poll list_transactions for a settled outgoing payment matching paymentHash. */
+  private async pollSettlement(
+    paymentHash: string,
+    attempts = 4,
+    delayMs = 2000,
+  ): Promise<WalletTransaction | null> {
+    for (let i = 0; i < attempts; i++) {
+      await delay(delayMs);
+      try {
+        const txs = await this.listTransactions({ limit: 30 });
+        const tx = txs.find((t) => t.paymentHash === paymentHash && t.settledAt != null);
+        if (tx) return tx;
+      } catch {
+        // keep polling
+      }
+    }
+    return null;
   }
 
   async lookupInvoice(opts: { invoice?: string; paymentHash?: string }): Promise<{ paid: boolean } & Record<string, unknown>> {
@@ -111,6 +176,7 @@ export class NwcProvider implements LightningProvider {
       feesPaidSats: Math.floor(Number(t.fees_paid) / 1000) || 0,
       description: t.description || undefined,
       paymentHash: t.payment_hash || undefined,
+      preimage: t.preimage || undefined,
       settledAt: t.settled_at ?? null,
       createdAt: t.created_at,
     }));
@@ -203,4 +269,50 @@ function nip04Decrypt(payload: string, secret: Uint8Array, pubkeyHex: string): s
 
 function hexToBytes(hex: string): Uint8Array {
   return Uint8Array.from(Buffer.from(hex, 'hex'));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// --- bolt11 payment-hash extraction ----------------------------------------
+
+/** Extract the payment hash (hex) from a bolt11 invoice, or null if it can't be parsed. */
+export function paymentHashFromInvoice(invoice: string): string | null {
+  try {
+    const lower = invoice.toLowerCase();
+    const { words } = bech32.decode(lower as `${string}1${string}`, lower.length + 1);
+    // bolt11 data words = [ 7-word timestamp | tagged fields… | 104-word signature ]
+    const taggedEnd = words.length - 104;
+    let pos = 7;
+    while (pos + 3 <= taggedEnd) {
+      const type = words[pos];
+      const len = (words[pos + 1] << 5) | words[pos + 2];
+      pos += 3;
+      if (pos + len > words.length) break;
+      if (type === 1) {
+        // tag 'p' = 256-bit payment hash
+        return Buffer.from(fiveBitToBytes(words.slice(pos, pos + len)).slice(0, 32)).toString('hex');
+      }
+      pos += len;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function fiveBitToBytes(words: number[]): Uint8Array {
+  let acc = 0;
+  let bits = 0;
+  const out: number[] = [];
+  for (const w of words) {
+    acc = (acc << 5) | w;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push((acc >> bits) & 0xff);
+    }
+  }
+  return Uint8Array.from(out);
 }

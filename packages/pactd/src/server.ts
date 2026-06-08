@@ -15,7 +15,7 @@ import {
 
 import { lightningFromEnv } from './lightning.js';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
 const lightning = lightningFromEnv(); // null unless PACT_NWC is set
