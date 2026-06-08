@@ -37,7 +37,9 @@ curl -s "localhost:8787/bonds/verify?bond_id=urn:mate:demo"
 
 ## Sats / Lightning (Nostr Wallet Connect)
 
-`pactd` moves sats **non-custodially** via [NWC (NIP-47)](https://github.com/nostr-protocol/nips/blob/master/47.md): it connects to **your own** Lightning wallet (lnflash / Alby / any NWC wallet) over Nostr and relays signed, NIP-04-encrypted requests to it. **pactd never holds funds or wallet keys.**
+`pactd` moves sats **non-custodially** via [NWC (NIP-47)](https://github.com/nostr-protocol/nips/blob/master/47.md): it connects to **your own** Lightning wallet over Nostr and relays signed, NIP-04-encrypted requests to it. **pactd never holds funds or wallet keys.**
+
+Works with any **NWC-compatible wallet** — **[Alby](https://getalby.com), [Coinos](https://coinos.io), [Primal](https://primal.net)**, etc. **Note: lnflash does not support NWC yet**, so it can't be used through this provider; a direct lnflash provider (via its API) is planned (see below).
 
 ```bash
 export PACT_NWC="nostr+walletconnect://<wallet-pubkey>?relay=wss://…&secret=<hex>"
@@ -59,4 +61,4 @@ This first cut ships the **rail + primitives** (invoice / pay / lookup / balance
 
 Binds to loopback only. The key lives with the daemon (mode 600 under `~/.pact`), never in the agent process — process isolation. Point `?relay=` at your own relay for a fully sovereign setup.
 
-Not yet implemented: remote signer (NIP-46), live relay subscriptions (the SSE stream currently polls), NIP-44 NWC encryption (uses NIP-04), bonding/escrow + agent-labor market endpoints.
+Not yet implemented: **direct lnflash provider** (lnflash has no NWC yet), remote signer (NIP-46), live relay subscriptions (the SSE stream currently polls), NIP-44 NWC encryption (uses NIP-04), bonding/escrow + agent-labor market endpoints.
