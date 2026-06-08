@@ -137,7 +137,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_pay_invoice',
-    "Pay a bolt11 Lightning invoice from the daemon's wallet. SPENDS sats (subject to your wallet's NWC budget).",
+    "Pay a bolt11 Lightning invoice from the daemon's wallet. SPENDS sats (subject to your wallet's NWC budget). Returns status: 'settled' (confirmed paid), 'pending' (submitted but unconfirmed — DO NOT retry, may double-spend; check pact_list_transactions), or 'failed' (rejected, no funds moved).",
     { invoice: z.string().describe('The bolt11 invoice to pay.') },
     async ({ invoice }) => text(await daemon('POST', '/wallet/pay', { invoice })),
   );
