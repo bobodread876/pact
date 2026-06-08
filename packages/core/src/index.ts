@@ -6,6 +6,7 @@
 
 export * from '@mate-protocol/core';
 export { makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
+export * from './keystore.js';
 
 import {
   DEFAULT_RELAYS,

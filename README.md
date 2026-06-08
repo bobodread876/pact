@@ -32,8 +32,8 @@ Early build. Thesis, architecture, and economic design drafted. Monorepo scaffol
 |---|---|---|
 | [`@pact/core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve |
 | [`pact-mcp`](packages/mcp) | ✅ MVP | MCP server — bonds-as-tools for any MCP agent |
+| [`@pact/pactd`](packages/pactd) | ✅ MVP | sidecar daemon — bonds over localhost HTTP for any platform/language |
 | [`@pact/sdk`](packages/sdk) | stub | in-process TS/Python SDK |
-| [`@pact/pactd`](packages/pactd) | stub | sidecar daemon (universal adapter) |
 | [`@pact/cli`](packages/cli) | stub | shell CLI |
 | [`pact-stack`](packages/stack) | stub | `docker compose` self-host bundle |
 
