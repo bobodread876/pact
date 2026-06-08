@@ -144,15 +144,17 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_list_transactions',
-    "List the wallet's recent Lightning transactions (received + sent). The reliable way to audit payments — unlike get_balance, this reflects actual settlements.",
+    "List Lightning transactions (received + sent). By DEFAULT shows only Pact's own payments (invoices Pact created + payments it made), so it never exposes unrelated transactions from other apps sharing the same wallet. Set all=true to show the entire wallet ledger (operator-only). The reliable settlement audit — unlike get_balance.",
     {
       limit: z.number().int().positive().optional().describe('Max transactions to return (default 20).'),
       unpaid: z.boolean().optional().describe('Include unpaid/pending invoices.'),
+      all: z.boolean().optional().describe("Show the ENTIRE wallet, not just Pact's payments. Exposes other apps' transactions — use deliberately."),
     },
-    async ({ limit, unpaid }) => {
+    async ({ limit, unpaid, all }) => {
       const qs = new URLSearchParams();
       if (limit) qs.set('limit', String(limit));
       if (unpaid) qs.set('unpaid', 'true');
+      if (all) qs.set('all', 'true');
       const suffix = qs.toString() ? `?${qs}` : '';
       return text(await daemon('GET', `/wallet/transactions${suffix}`));
     },

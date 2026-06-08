@@ -13,9 +13,10 @@ import {
   type RelayFilter,
 } from '@pact/core';
 
+import { ownsPaymentHash, recordPaymentHash } from './ledger.js';
 import { lightningFromEnv } from './lightning.js';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.4.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
 const lightning = lightningFromEnv(); // null unless PACT_NWC is set
@@ -137,6 +138,7 @@ export function createDaemon() {
           const paymentHash = url.searchParams.get('payment_hash');
           if (!paymentHash) {
             const inv = await lightning.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
+            recordPaymentHash(inv.paymentHash);
             return json(res, 402, {
               error: 'payment required',
               price_sats: VERIFY_PRICE_SATS,
@@ -183,7 +185,9 @@ export function createDaemon() {
           return json(res, 400, { error: 'amountSats (positive number) required' });
         }
         const description = typeof body.description === 'string' ? body.description : undefined;
-        return json(res, 200, await lightning.makeInvoice(amountSats, description));
+        const inv = await lightning.makeInvoice(amountSats, description);
+        recordPaymentHash(inv.paymentHash);
+        return json(res, 200, inv);
       }
       if (path === '/wallet/invoice' && method === 'GET') {
         if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
@@ -196,13 +200,21 @@ export function createDaemon() {
         if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
         const body = await readJson(req);
         if (typeof body.invoice !== 'string') return json(res, 400, { error: 'invoice (bolt11 string) required' });
-        return json(res, 200, await lightning.payInvoice(body.invoice));
+        const payment = await lightning.payInvoice(body.invoice);
+        recordPaymentHash(payment.paymentHash);
+        return json(res, 200, payment);
       }
       if (path === '/wallet/transactions' && method === 'GET') {
         if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
         const limit = Number(url.searchParams.get('limit')) || 20;
         const unpaid = url.searchParams.get('unpaid') === 'true';
-        return json(res, 200, { transactions: await lightning.listTransactions({ limit, unpaid }) });
+        // Scope to Pact-originated payments by default so the agent never sees
+        // unrelated transactions from other apps on a shared NWC wallet/node.
+        // ?all=true returns the whole wallet (operator escape hatch).
+        const all = url.searchParams.get('all') === 'true';
+        const fetched = await lightning.listTransactions({ limit: all ? limit : 200, unpaid });
+        const transactions = all ? fetched : fetched.filter((t) => ownsPaymentHash(t.paymentHash)).slice(0, limit);
+        return json(res, 200, { scope: all ? 'all' : 'pact', count: transactions.length, transactions });
       }
 
       // --- event stream (inbox / heartbeat) ---
