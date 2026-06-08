@@ -1,7 +1,7 @@
 {
   "name": "pact-mcp",
-  "version": "0.1.0",
-  "description": "Pact MCP server — give any MCP-capable agent the tools to form, manage, and verify relationship bonds.",
+  "version": "0.2.0",
+  "description": "Pact MCP server — give any MCP-capable agent the tools to form, manage, and verify relationship bonds (thin client over a pactd daemon).",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@pact/core": "0.1.0",
     "zod": "^3.23.0"
   }
 }

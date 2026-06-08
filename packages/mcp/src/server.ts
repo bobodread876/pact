@@ -1,116 +1,113 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
-import {
-  DEFAULT_RELAYS,
-  ensureIdentity,
-  formBond,
-  hasIdentity,
-  listBonds,
-  loadIdentity,
-  loadSecret,
-  pubkeyHexFromIdentity,
-  type BondState,
-  type RelayFilter,
-} from '@pact/core';
+// pact-mcp is a thin MCP adapter over a running `pactd` daemon. The daemon holds
+// the agent's key, relay config, and wallet; this server just exposes its
+// operations as MCP tools. So an MCP agent (Claude Code, etc.) acts as that one
+// sovereign pactd identity. Point it at the daemon with PACT_DAEMON_URL.
+const DAEMON_URL = (process.env.PACT_DAEMON_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
+const TOKEN = process.env.PACT_TOKEN; // matches the daemon's PACT_TOKEN, if set
 
-const BOND_STATES = [
-  'proposed',
-  'accepted',
-  'active',
-  'paused',
-  'revoked',
-  'withdrawn',
-  'rejected',
-] as const;
+const BOND_STATES = ['proposed', 'accepted', 'active', 'paused', 'revoked', 'withdrawn', 'rejected'] as const;
 
 function text(value: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+  return {
+    content: [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
+  };
+}
+
+async function daemon(method: string, path: string, body?: unknown): Promise<unknown> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (TOKEN) headers.authorization = `Bearer ${TOKEN}`;
+  let res: Response;
+  try {
+    res = await fetch(`${DAEMON_URL}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    return { error: `cannot reach pactd at ${DAEMON_URL} — is the daemon running? (${String(error)})` };
+  }
+  const raw = await res.text();
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = raw;
+  }
+  return { status: res.status, ...(typeof data === 'object' && data ? data : { data }) };
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.1.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.2.0' });
 
   server.tool(
     'pact_keygen',
-    'Create this agent\'s self-sovereign Nostr identity (did:nostr) for forming relationship bonds. Stored locally at ~/.pact. Idempotent unless force=true.',
+    "Create this agent's self-sovereign Nostr identity (did:nostr) on the local pactd daemon. Idempotent unless force=true.",
     { force: z.boolean().default(false).describe('Regenerate even if an identity already exists (destructive).') },
-    async ({ force }) => text(ensureIdentity(force)),
+    async ({ force }) => text(await daemon('POST', '/identity', { force })),
   );
 
   server.tool(
     'pact_whoami',
-    "Return this agent's bond identity (did:nostr / npub / pubkey), or indicate none exists yet.",
+    "Return this agent's bond identity (did:nostr / npub / pubkey) from the daemon.",
     {},
-    async () => {
-      if (!hasIdentity()) return text({ identity: null, hint: 'run pact_keygen first' });
-      const id = loadIdentity();
-      return text({ did: id.did, npub: id.npub, pubkeyHex: id.pubkeyHex });
-    },
+    async () => text(await daemon('GET', '/identity')),
   );
 
   server.tool(
     'pact_form_bond',
-    'Declare or update a relationship bond toward a counterparty and publish it to relays. Use state="proposed" to offer a bond, "accepted"/"active" to reciprocate, "revoked" to end it.',
+    'Declare or update a relationship bond toward a counterparty and publish it via the daemon. state="proposed" to offer, "accepted"/"active" to reciprocate, "revoked" to end.',
     {
       counterparty: z.string().describe('Counterparty identity: did:nostr / npub / 64-hex pubkey.'),
       bond_id: z.string().describe('Stable bond id shared by both parties, e.g. "urn:mate:my-bond-01".'),
       state: z.enum(BOND_STATES).default('proposed').describe('Bond state to declare.'),
       kind: z.string().default('companion').describe('Relationship kind (e.g. companion, collaboration).'),
-      relays: z.array(z.string()).optional().describe('Relay URLs (defaults to Pact public relays).'),
+      relays: z.array(z.string()).optional().describe('Relay URLs (defaults to the daemon\'s configured relays).'),
       history: z.boolean().default(true).describe('Also publish a kind:1317 history event.'),
     },
-    async ({ counterparty, bond_id, state, kind, relays, history }) => {
-      const result = await formBond(loadSecret(), {
-        counterparty,
-        bondId: bond_id,
-        state: state as BondState,
-        kind,
-        relays,
-        history,
-      });
-      return text(result);
-    },
+    async ({ counterparty, bond_id, state, kind, relays, history }) =>
+      text(await daemon('POST', '/bonds', { counterparty, bondId: bond_id, state, kind, relays, history })),
   );
 
   server.tool(
     'pact_list_bonds',
-    'Resolve relationship bonds from relays and verify each signature. Filter by bond id, counterparty, or author. With no filter, lists this agent\'s own bonds.',
+    "Resolve relationship bonds via the daemon and verify each signature. Filter by bond id, counterparty, or author. With no filter, lists this agent's own bonds.",
     {
-      bond_id: z.string().optional().describe('Match a specific bond id (d tag).'),
-      counterparty: z.string().optional().describe('Match bonds toward this identity (p tag).'),
-      author: z.string().optional().describe('Match bonds authored by this identity. Defaults to self.'),
-      relays: z.array(z.string()).optional().describe('Relay URLs (defaults to Pact public relays).'),
+      bond_id: z.string().optional().describe('Match a specific bond id.'),
+      counterparty: z.string().optional().describe('Match bonds toward this identity.'),
+      author: z.string().optional().describe('Match bonds authored by this identity.'),
     },
-    async ({ bond_id, counterparty, author, relays }) => {
-      const filter: Pick<RelayFilter, 'authors' | '#d' | '#p'> = {};
-      if (author) filter.authors = [pubkeyHexFromIdentity(author)];
-      if (counterparty) filter['#p'] = [pubkeyHexFromIdentity(counterparty)];
-      if (bond_id) filter['#d'] = [bond_id];
-      if (!author && !counterparty && !bond_id && hasIdentity()) {
-        filter.authors = [loadIdentity().pubkeyHex];
-      }
-      const result = await listBonds(filter, relays?.length ? relays : DEFAULT_RELAYS);
-      return text(result);
+    async ({ bond_id, counterparty, author }) => {
+      const qs = new URLSearchParams();
+      if (bond_id) qs.set('bond_id', bond_id);
+      if (counterparty) qs.set('counterparty', counterparty);
+      if (author) qs.set('author', author);
+      const suffix = qs.toString() ? `?${qs}` : '';
+      return text(await daemon('GET', `/bonds${suffix}`));
     },
   );
 
   server.tool(
     'pact_verify_bond',
-    'Resolve a specific bond and report whether each side\'s event signature is valid and whether it is a mutual bond (both parties p-tagging each other).',
+    'Verify a bond via the daemon (signatures + mutual check). If the daemon charges for verification it returns a Lightning invoice (status 402); pay it and call again with payment_hash.',
     {
       bond_id: z.string().describe('The bond id to verify.'),
-      relays: z.array(z.string()).optional().describe('Relay URLs (defaults to Pact public relays).'),
+      payment_hash: z.string().optional().describe('Payment hash of a paid invoice, to satisfy a paywalled verify.'),
     },
-    async ({ bond_id, relays }) => {
-      const { relaysReached, bonds } = await listBonds({ '#d': [bond_id] }, relays?.length ? relays : DEFAULT_RELAYS);
-      const authors = new Set(bonds.map((b) => b.author));
-      const mutual =
-        bonds.length >= 2 &&
-        bonds.every((b) => b.signature_valid) &&
-        bonds.some((b) => authors.has(b.counterparty ?? ''));
-      return text({ bond_id, relaysReached, count: bonds.length, mutual, bonds });
+    async ({ bond_id, payment_hash }) => {
+      const qs = new URLSearchParams({ bond_id });
+      if (payment_hash) qs.set('payment_hash', payment_hash);
+      return text(await daemon('GET', `/bonds/verify?${qs}`));
     },
+  );
+
+  server.tool(
+    'pact_wallet',
+    "Report the daemon's Lightning wallet status and balance (via Nostr Wallet Connect), or that none is connected.",
+    {},
+    async () => text(await daemon('GET', '/wallet')),
   );
 
   return server;
