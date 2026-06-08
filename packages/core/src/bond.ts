@@ -1,4 +1,6 @@
-// Bond document model + assembly. Mirrors the MATE.md v0.2 core shape.
+// L2 bond assembly. Builds a MATE.md document (the L1 type) from bond params.
+
+import type { MateDocument } from '@mate-protocol/core';
 
 export type BondState =
   | 'none'
@@ -12,33 +14,6 @@ export type BondState =
   | 'expired'
   | 'archived';
 
-export interface BondConsent {
-  required?: boolean;
-  mutual?: boolean;
-  revocable: boolean;
-  unilateral_exit_allowed?: boolean;
-  accepted_at?: string | null;
-  revoked_at?: string | null;
-  withdrawn_at?: string | null;
-  rejected_at?: string | null;
-  expired_at?: string | null;
-}
-
-export interface BondDocument {
-  mate_version: string;
-  subject: { id: string };
-  object: { id: string };
-  bond: {
-    id: string;
-    state: BondState;
-    kind?: string | null;
-    created_at?: string | null;
-    updated_at?: string | null;
-  };
-  consent: BondConsent;
-  proofs?: unknown[];
-}
-
 export interface MakeBondOptions {
   bondId: string;
   state: BondState;
@@ -47,9 +22,9 @@ export interface MakeBondOptions {
 }
 
 /** Assemble a bond document, filling the consent timestamp the state requires. */
-export function makeBondDocument(subjectId: string, objectId: string, options: MakeBondOptions): BondDocument {
+export function makeBondDocument(subjectId: string, objectId: string, options: MakeBondOptions): MateDocument {
   const now = new Date().toISOString();
-  const consent: BondConsent = {
+  const consent: Record<string, unknown> = {
     required: true,
     mutual: true,
     revocable: true,
@@ -59,14 +34,13 @@ export function makeBondDocument(subjectId: string, objectId: string, options: M
   if (['accepted', 'active', 'paused', 'revoked'].includes(options.state)) {
     consent.accepted_at = now;
   }
-  const terminalAt: Partial<Record<BondState, keyof BondConsent>> = {
+  const terminalAt: Record<string, string> = {
     revoked: 'revoked_at',
     withdrawn: 'withdrawn_at',
     rejected: 'rejected_at',
     expired: 'expired_at',
   };
-  const field = terminalAt[options.state];
-  if (field) (consent as unknown as Record<string, unknown>)[field] = now;
+  if (terminalAt[options.state]) consent[terminalAt[options.state]] = now;
 
   return {
     mate_version: '0.2',
@@ -79,7 +53,7 @@ export function makeBondDocument(subjectId: string, objectId: string, options: M
       created_at: options.createdAt ?? now,
       updated_at: now,
     },
-    consent,
+    consent: consent as unknown as MateDocument['consent'],
     proofs: [],
   };
 }
