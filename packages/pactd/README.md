@@ -39,7 +39,7 @@ curl -s "localhost:8787/bonds/verify?bond_id=urn:mate:demo"
 
 `pactd` moves sats **non-custodially** via [NWC (NIP-47)](https://github.com/nostr-protocol/nips/blob/master/47.md): it connects to **your own** Lightning wallet over Nostr and relays signed, NIP-04-encrypted requests to it. **pactd never holds funds or wallet keys.**
 
-Works with any **NWC-compatible wallet** — **[Alby](https://getalby.com), [Coinos](https://coinos.io), [Primal](https://primal.net)**, etc. **Note: lnflash does not support NWC yet**, so it can't be used through this provider; a direct lnflash provider (via its API) is planned (see below).
+Works with any **NWC-compatible wallet** — **[Phoenix](https://phoenix.acinq.co)** (verified ✓), **[Alby](https://getalby.com), [Coinos](https://coinos.io), [Primal](https://primal.net)**, etc. **Note: lnflash does not support NWC yet**, so it can't be used through this provider; a direct lnflash provider (via its API) is planned (see below).
 
 ```bash
 export PACT_NWC="nostr+walletconnect://<wallet-pubkey>?relay=wss://…&secret=<hex>"
