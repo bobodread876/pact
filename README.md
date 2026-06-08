@@ -35,7 +35,7 @@ Early build. Thesis, architecture, and economic design drafted. Monorepo scaffol
 | [`@pact/pactd`](packages/pactd) | ✅ MVP | sidecar daemon — bonds over localhost HTTP for any platform/language |
 | [`@pact/sdk`](packages/sdk) | stub | in-process TS/Python SDK |
 | [`@pact/cli`](packages/cli) | stub | shell CLI |
-| [`pact-stack`](packages/stack) | stub | `docker compose` self-host bundle |
+| [`pact-stack`](packages/stack) | ✅ Docker + Umbrel · Start9 scaffold | one-command sovereign self-host + one-click app-store packaging |
 
 ## Docs
 

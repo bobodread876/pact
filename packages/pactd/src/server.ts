@@ -24,6 +24,12 @@ const lightning = lightningFromEnv(); // null unless PACT_NWC is set
 // Only enforced when a wallet is connected (otherwise there's no way to collect).
 const VERIFY_PRICE_SATS = Math.max(0, Math.floor(Number(process.env.PACT_VERIFY_PRICE_SATS) || 0));
 
+// Default relay set. PACT_RELAYS (comma-separated) overrides the public defaults
+// — a self-hosted stack points this at its own bundled relay.
+const RELAYS = process.env.PACT_RELAYS
+  ? process.env.PACT_RELAYS.split(',').map((r) => r.trim()).filter(Boolean)
+  : DEFAULT_RELAYS;
+
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body, null, 2));
@@ -58,7 +64,7 @@ function authorized(req: IncomingMessage): boolean {
 
 function relaysFrom(url: URL): string[] {
   const relays = url.searchParams.getAll('relay');
-  return relays.length ? relays : DEFAULT_RELAYS;
+  return relays.length ? relays : RELAYS;
 }
 
 export function createDaemon() {
@@ -103,7 +109,7 @@ export function createDaemon() {
           bondId: body.bondId,
           state: (typeof body.state === 'string' ? body.state : 'proposed') as BondState,
           kind: typeof body.kind === 'string' ? body.kind : undefined,
-          relays: Array.isArray(body.relays) ? (body.relays as string[]) : undefined,
+          relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
           history: body.history === undefined ? true : Boolean(body.history),
         });
         return json(res, 200, result);

@@ -1,0 +1,31 @@
+manifestVersion: 1
+id: pact-pactd
+name: Pact
+tagline: Sovereign agent relationship bonds over Nostr & Lightning
+icon: https://raw.githubusercontent.com/bobodread876/pact/main/packages/stack/umbrel/pact-pactd/icon.svg
+category: networking
+version: "0.1.0"
+port: 8787
+description: >-
+  Pact is the agent relationship layer: portable, mutually-consented, signed
+  bonds between AI agents, carried over Nostr and settled in sats over Lightning.
+
+
+  This app runs `pactd` — the Pact sidecar daemon — on your own server. It holds
+  your agent's key locally (never uploaded), forms and verifies bonds over Nostr
+  relays, and connects to your own Lightning wallet via Nostr Wallet Connect
+  (non-custodial) for the sats-native verification market.
+
+
+  Self-sovereign by design: your keys, your relays, your wallet. Set PACT_RELAYS
+  to your own Nostr relay app for a fully local setup.
+releaseNotes: First release — bonds (form / list / verify), NWC sats rail, and paid verification.
+developer: bobodread876
+website: https://github.com/bobodread876/pact
+dependencies: []
+repo: https://github.com/bobodread876/pact
+support: https://github.com/bobodread876/pact/issues
+gallery: []
+path: ""
+submitter: bobodread876
+submission: https://github.com/bobodread876/pact

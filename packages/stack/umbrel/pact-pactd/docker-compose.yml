@@ -1,0 +1,22 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: pact-pactd_web_1
+      APP_PORT: 8787
+
+  web:
+    image: ghcr.io/bobodread876/pactd:0.1.0
+    restart: on-failure
+    environment:
+      PACT_HOST: 0.0.0.0
+      PACT_PORT: "8787"
+      # Optional: point at your own relay (e.g. an Umbrel Nostr relay app).
+      # Defaults to public relays if unset.
+      # PACT_RELAYS: ws://<relay-host>:<port>
+      # Optional: non-custodial sats via Nostr Wallet Connect.
+      # PACT_NWC: nostr+walletconnect://...
+      # PACT_VERIFY_PRICE_SATS: "0"
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
