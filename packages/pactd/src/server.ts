@@ -20,11 +20,17 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.11.1';
+export const VERSION = '0.12.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
 const TOKEN = resolveToken();
+
+// Public-exposure mode: when set, the status UI never embeds the bearer token in
+// the page HTML (the operator enters it; agents read it from config). Turn this
+// on for any node reachable beyond a trusted LAN / login (e.g. a public reverse
+// proxy), so loading the page can't leak the token to anonymous visitors.
+const PUBLIC_MODE = !['', '0', 'false'].includes((process.env.PACT_PUBLIC_MODE ?? '').toLowerCase());
 // Wallet provider: configured at runtime (via the UI / POST /wallet/connect,
 // persisted in PACT_HOME) or from PACT_NWC. Mutable so it can be (re)connected.
 let lightning = lightningFrom(loadNwcUri());
@@ -87,7 +93,7 @@ export function createDaemon() {
       // for its API calls; on Umbrel the page is behind app_proxy).
       if (path === '/' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(renderUI(TOKEN, process.env.PACT_PUBLIC_PORT, process.env.PACT_RELAY_PUBLIC_PORT));
+        return res.end(renderUI(TOKEN, process.env.PACT_PUBLIC_PORT, process.env.PACT_RELAY_PUBLIC_PORT, PUBLIC_MODE));
       }
       if (path === '/healthz') {
         return json(res, 200, {
