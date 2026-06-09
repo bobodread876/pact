@@ -5,7 +5,7 @@
 #   curl -s localhost:8787/healthz
 #
 # Pulls the published multi-arch pactd image + runs your OWN Nostr relay. pactd
-# defaults its relays to the bundled relay (PACT_RELAYS=ws://relay:8080), so your
+# defaults its relays to the bundled relay (PACT_RELAYS=ws://relay:7777), so your
 # bonds can live entirely on your box. pactd is exposed on host loopback only.
 #
 # To build pactd from source instead of pulling:
@@ -14,11 +14,10 @@ name: pact-stack
 
 services:
   relay:
-    image: scsibug/nostr-rs-relay:latest
+    image: ghcr.io/bobodread876/pact-relay:latest
     restart: unless-stopped
     volumes:
-      - relay-data:/usr/src/app/db
-      - ./relay/config.toml:/usr/src/app/config.toml:ro
+      - relay-data:/data
     # internal only — reachable by pactd on the compose network as `relay`
 
   pactd:
@@ -29,7 +28,7 @@ services:
     environment:
       PACT_HOST: 0.0.0.0
       PACT_PORT: "8787"
-      PACT_RELAYS: ws://relay:8080
+      PACT_RELAYS: ws://relay:7777
       PACT_NWC: ${PACT_NWC:-}
       PACT_VERIFY_PRICE_SATS: ${PACT_VERIFY_PRICE_SATS:-0}
       PACT_TOKEN: ${PACT_TOKEN:-}

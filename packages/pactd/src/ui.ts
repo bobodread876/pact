@@ -28,7 +28,7 @@ export function renderUI(token: string | undefined, publicPort?: string): string
   .ok { color:#5ad17f; } .warn { color:#f7931a; } .muted { color:#6b6b76; }
   button { background:#f7931a; color:#0b0b0f; border:0; border-radius:9px; padding:9px 14px; font-weight:600; cursor:pointer; }
   button.secondary { background:#23232e; color:#e7e7ea; }
-  input { width:100%; background:#0b0b0f; border:1px solid #2a2a36; border-radius:9px; padding:10px; color:#e7e7ea; font-family:ui-monospace,monospace; font-size:13px; }
+  input, textarea { width:100%; background:#0b0b0f; border:1px solid #2a2a36; border-radius:9px; padding:10px; color:#e7e7ea; font-family:ui-monospace,monospace; font-size:13px; resize:vertical; }
   .row { display:flex; gap:8px; margin-top:10px; }
   .pill { display:inline-block; font-size:11px; padding:2px 8px; border:1px solid #2a2a36; border-radius:999px; color:#9a9aa3; margin:2px 4px 2px 0; }
   a { color:#8a5cf6; }
@@ -46,6 +46,7 @@ export function renderUI(token: string | undefined, publicPort?: string): string
   <div class="card" id="identity-card"><h2>Identity</h2><div id="identity">Loading…</div></div>
   <div class="card" id="wallet-card"><h2>Lightning wallet</h2><div id="wallet">Loading…</div></div>
   <div class="card" id="bonds-card"><h2>Bonds</h2><div id="bonds">Loading…</div></div>
+  <div class="card" id="relays-card"><h2>Relays</h2><div id="relays">Loading…</div></div>
   <div class="card" id="agent-card" style="display:none"><h2>Connect an agent</h2><div id="agent"></div></div>
 
   <div class="badge muted" style="margin-top:20px">
@@ -112,6 +113,26 @@ async function refresh() {
     ? bonds.map(x => '<div class="bond"><span class="' + (x.signature_valid?'ok':'warn') + '">●</span> ' +
         esc(x.state||'?') + ' · ' + esc(x.bond||'') + '</div>').join('')
     : '<p class="muted">No bonds yet. Form one with the <code>pact_form_bond</code> tool or <code>POST /bonds</code>.</p>';
+
+  const rl = await api('GET', '/relays');
+  const relays = (rl && rl.relays) || [];
+  el('relays').innerHTML =
+    '<div style="margin-bottom:10px">' + relays.map(r=>'<span class="pill">'+esc(r)+'</span>').join('') +
+      (rl && rl.custom ? '' : ' <span class="badge muted">(defaults)</span>') + '</div>' +
+    '<p class="muted">Where bonds are published &amp; resolved. Use public relays, a relay bundled with Pact (<code>ws://relay:8080</code>), or another relay app on your server (e.g. an Umbrel Nostr relay app — <code>ws://&lt;relay-app&gt;_web_1:&lt;port&gt;</code>). One per line:</p>' +
+    '<textarea id="relay-input" rows="3" placeholder="wss://relay.example.com">' + esc(relays.join('\\n')) + '</textarea>' +
+    '<div class="row"><button id="save-relays">Save relays</button>' +
+      (rl && rl.custom ? '<button class="secondary" id="reset-relays">Use public defaults</button>' : '') + '</div>' +
+    '<div class="badge muted" id="relay-msg" style="margin-top:8px"></div>';
+  el('save-relays').onclick = async () => {
+    const list = el('relay-input').value.split('\\n').map(s=>s.trim()).filter(Boolean);
+    if (!list.length) { el('relay-msg').textContent = 'enter at least one relay URL'; return; }
+    el('relay-msg').textContent = 'Saving…';
+    const res = await api('POST', '/relays', { relays: list });
+    if (res && res.relays) refresh(); else el('relay-msg').textContent = (res && res.error) || 'failed to save relays';
+  };
+  const resetBtn = el('reset-relays');
+  if (resetBtn) resetBtn.onclick = async () => { await api('POST', '/relays', { relays: (rl && rl.default) || [] }); refresh(); };
 
   if (TOKEN) {
     el('agent-card').style.display = '';

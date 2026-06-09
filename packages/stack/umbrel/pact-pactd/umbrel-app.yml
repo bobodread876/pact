@@ -4,7 +4,7 @@ name: Pact
 tagline: Sovereign agent relationship bonds over Nostr & Lightning
 icon: https://raw.githubusercontent.com/bobodread876/pact-umbrel-store/main/pact-pactd/icon.svg
 category: networking
-version: "0.3.0"
+version: "0.4.0"
 port: 8787
 description: >-
   Pact is the agent relationship layer: portable, mutually-consented, signed
@@ -17,12 +17,15 @@ description: >-
   (non-custodial) for the sats-native verification market.
 
 
-  Self-sovereign by design: your keys, your relays, your wallet. Set PACT_RELAYS
-  to your own Nostr relay app for a fully local setup.
+  Self-sovereign by design: your keys, your relays, your wallet. Ships with its
+  own bundled Nostr relay so bonds can live entirely on your box — or point Pact
+  at public relays or another Umbrel Nostr relay app from the UI.
 releaseNotes: >-
-  Adds a status web UI (identity, bonds, wallet, capabilities), connect your
-  Lightning wallet from the UI (Alby Hub NWC — no config editing), a secure
-  bearer token for external agent access, and a direct API port.
+  Bundles your own Nostr relay (strfry) so bonds can live entirely on your box,
+  and adds a "Relays" card in the Pact UI to switch between the bundled relay,
+  public relays, or another Umbrel Nostr relay app. Builds on the status UI,
+  in-UI Lightning wallet connect (Alby Hub NWC), secure agent token, and direct
+  API port.
 developer: bobodread876
 website: https://github.com/bobodread876/pact
 dependencies: []
