@@ -284,10 +284,14 @@ export class NwcProvider implements LightningProvider {
   }
 }
 
+/** Build a Lightning provider from an NWC URI (validates it), or null if empty. */
+export function lightningFrom(uri: string | undefined): LightningProvider | null {
+  return uri ? NwcProvider.fromUri(uri) : null;
+}
+
 /** Build a Lightning provider from the environment (PACT_NWC), or null if unset. */
 export function lightningFromEnv(): LightningProvider | null {
-  const uri = process.env.PACT_NWC;
-  return uri ? NwcProvider.fromUri(uri) : null;
+  return lightningFrom(process.env.PACT_NWC || undefined);
 }
 
 // --- NIP-04 (encrypted NWC payloads) ---------------------------------------

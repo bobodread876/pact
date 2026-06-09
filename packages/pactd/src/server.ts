@@ -14,12 +14,16 @@ import {
 } from '@pact/core';
 
 import { ownsPaymentHash, recordPaymentHash } from './ledger.js';
-import { lightningFromEnv } from './lightning.js';
+import { lightningFrom } from './lightning.js';
+import { renderUI } from './ui.js';
+import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.6.0';
+export const VERSION = '0.7.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
-const lightning = lightningFromEnv(); // null unless PACT_NWC is set
+// Wallet provider: configured at runtime (via the UI / POST /wallet/connect,
+// persisted in PACT_HOME) or from PACT_NWC. Mutable so it can be (re)connected.
+let lightning = lightningFrom(loadNwcUri());
 
 // Paid-verification market (opt-in): price in sats to verify a bond. 0 = free.
 // Only enforced when a wallet is connected (otherwise there's no way to collect).
@@ -74,13 +78,19 @@ export function createDaemon() {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
       const method = req.method ?? 'GET';
+      const ln = lightning; // per-request snapshot (const → narrows across awaits)
 
-      // Health is unauthenticated.
+      // Status UI + health are unauthenticated (the UI itself injects the token
+      // for its API calls; on Umbrel the page is behind app_proxy).
+      if (path === '/' && method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(renderUI(TOKEN));
+      }
       if (path === '/healthz') {
         return json(res, 200, {
           ok: true,
           version: VERSION,
-          wallet: Boolean(lightning),
+          wallet: Boolean(ln),
           verifyPriceSats: VERIFY_PRICE_SATS || undefined,
         });
       }
@@ -133,11 +143,11 @@ export function createDaemon() {
         // Paid-verification market (L402-style). Active only when a price is set
         // AND a wallet is connected to collect to. First request → 402 + invoice;
         // retry with ?payment_hash=<hash> once paid.
-        const paywalled = VERIFY_PRICE_SATS > 0 && lightning;
-        if (paywalled) {
+        const paywalled = VERIFY_PRICE_SATS > 0 && Boolean(ln);
+        if (paywalled && ln) {
           const paymentHash = url.searchParams.get('payment_hash');
           if (!paymentHash) {
-            const inv = await lightning.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
+            const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
             recordPaymentHash(inv.paymentHash);
             return json(res, 402, {
               error: 'payment required',
@@ -147,7 +157,7 @@ export function createDaemon() {
               hint: 'pay the invoice, then retry with &payment_hash=<hash>',
             });
           }
-          const look = await lightning.lookupInvoice({ paymentHash });
+          const look = await ln.lookupInvoice({ paymentHash });
           if (!look.paid) {
             return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
           }
@@ -171,50 +181,68 @@ export function createDaemon() {
       }
 
       // --- wallet (non-custodial sats via NWC) ---
+      if (path === '/wallet/connect' && method === 'POST') {
+        const body = await readJson(req);
+        if (typeof body.nwc !== 'string') return json(res, 400, { error: 'nwc (nostr+walletconnect:// URI) required' });
+        try {
+          const provider = lightningFrom(body.nwc);
+          if (!provider) return json(res, 400, { error: 'invalid NWC URI' });
+          saveNwcUri(body.nwc);
+          lightning = provider;
+          return json(res, 200, { connected: true });
+        } catch (error) {
+          return json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      if (path === '/wallet/disconnect' && method === 'POST') {
+        clearNwcUri();
+        lightning = null;
+        return json(res, 200, { connected: false });
+      }
       if (path === '/wallet' && method === 'GET') {
-        if (!lightning) return json(res, 200, { connected: false, hint: 'set PACT_NWC to a nostr+walletconnect:// URI' });
-        const info = await lightning.getInfo().catch((e) => ({ error: String(e) }));
-        const balanceSats = await lightning.getBalanceSats().catch(() => null);
-        const capabilities = await lightning.getCapabilities().catch(() => null);
+        if (!ln) return json(res, 200, { connected: false, hint: 'connect a wallet via the UI or POST /wallet/connect' });
+        const info = await ln.getInfo().catch((e) => ({ error: String(e) }));
+        const balanceSats = await ln.getBalanceSats().catch(() => null);
+        const capabilities = await ln.getCapabilities().catch(() => null);
         return json(res, 200, { connected: true, balanceSats, capabilities, info });
       }
       if (path === '/wallet/invoice' && method === 'POST') {
-        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        if (!ln) return json(res, 400, { error: 'no wallet connected' });
         const body = await readJson(req);
         const amountSats = Number(body.amountSats);
         if (!Number.isFinite(amountSats) || amountSats <= 0) {
           return json(res, 400, { error: 'amountSats (positive number) required' });
         }
         const description = typeof body.description === 'string' ? body.description : undefined;
-        const inv = await lightning.makeInvoice(amountSats, description);
+        const inv = await ln.makeInvoice(amountSats, description);
         recordPaymentHash(inv.paymentHash);
         return json(res, 200, inv);
       }
       if (path === '/wallet/invoice' && method === 'GET') {
-        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        if (!ln) return json(res, 400, { error: 'no wallet connected' });
         const paymentHash = url.searchParams.get('payment_hash') ?? undefined;
         const invoice = url.searchParams.get('invoice') ?? undefined;
         if (!paymentHash && !invoice) return json(res, 400, { error: 'payment_hash or invoice query param required' });
-        return json(res, 200, await lightning.lookupInvoice({ paymentHash, invoice }));
+        return json(res, 200, await ln.lookupInvoice({ paymentHash, invoice }));
       }
       if (path === '/wallet/pay' && method === 'POST') {
-        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        if (!ln) return json(res, 400, { error: 'no wallet connected' });
         const body = await readJson(req);
         if (typeof body.invoice !== 'string') return json(res, 400, { error: 'invoice (bolt11 string) required' });
         const amountSats = typeof body.amountSats === 'number' ? body.amountSats : undefined;
-        const payment = await lightning.payInvoice(body.invoice, amountSats);
+        const payment = await ln.payInvoice(body.invoice, amountSats);
         recordPaymentHash(payment.paymentHash);
         return json(res, 200, payment);
       }
       if (path === '/wallet/transactions' && method === 'GET') {
-        if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
+        if (!ln) return json(res, 400, { error: 'no wallet connected' });
         const limit = Number(url.searchParams.get('limit')) || 20;
         const unpaid = url.searchParams.get('unpaid') === 'true';
         // Scope to Pact-originated payments by default so the agent never sees
         // unrelated transactions from other apps on a shared NWC wallet/node.
         // ?all=true returns the whole wallet (operator escape hatch).
         const all = url.searchParams.get('all') === 'true';
-        const fetched = await lightning.listTransactions({ limit: all ? limit : 200, unpaid });
+        const fetched = await ln.listTransactions({ limit: all ? limit : 200, unpaid });
         const transactions = all ? fetched : fetched.filter((t) => ownsPaymentHash(t.paymentHash)).slice(0, limit);
         return json(res, 200, { scope: all ? 'all' : 'pact', count: transactions.length, transactions });
       }
