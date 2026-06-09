@@ -56,7 +56,7 @@ export interface LightningProvider {
   getInfo(): Promise<Record<string, unknown>>;
   getBalanceSats(): Promise<number>;
   makeInvoice(amountSats: number, description?: string): Promise<Invoice>;
-  payInvoice(invoice: string): Promise<Payment>;
+  payInvoice(invoice: string, amountSats?: number): Promise<Payment>;
   lookupInvoice(opts: { invoice?: string; paymentHash?: string }): Promise<{ paid: boolean } & Record<string, unknown>>;
   listTransactions(opts?: { limit?: number; unpaid?: boolean }): Promise<WalletTransaction[]>;
 }
@@ -95,12 +95,26 @@ export class NwcProvider implements LightningProvider {
     return { invoice: String(r.invoice), paymentHash: r.payment_hash ? String(r.payment_hash) : undefined };
   }
 
-  async payInvoice(invoice: string): Promise<Payment> {
+  async payInvoice(invoice: string, amountSats?: number): Promise<Payment> {
     const paymentHash = paymentHashFromInvoice(invoice) ?? undefined;
+
+    // Amountless invoices require an explicit amount; reject up front otherwise.
+    const params: Record<string, unknown> = { invoice };
+    if (invoiceAmountSats(invoice) == null) {
+      if (!amountSats || amountSats <= 0) {
+        return {
+          status: 'failed',
+          error: 'amountless invoice — provide amountSats to specify how much to pay',
+          paymentHash,
+        };
+      }
+      params.amount = amountSats * 1000; // msats, for a zero-amount invoice
+    }
+
     let nwcError: string | undefined;
 
     try {
-      const r = await this.request('pay_invoice', { invoice });
+      const r = await this.request('pay_invoice', params);
       if (r.preimage) {
         return {
           status: 'settled',
@@ -297,6 +311,23 @@ export function paymentHashFromInvoice(invoice: string): string | null {
       pos += len;
     }
     return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Amount of a bolt11 invoice in sats, or null if the invoice is amountless. */
+export function invoiceAmountSats(invoice: string): number | null {
+  try {
+    const lower = invoice.toLowerCase();
+    const sep = lower.lastIndexOf('1'); // bech32 separator (no '1' in hrp/data otherwise)
+    if (sep < 0) return null;
+    const hrp = lower.slice(0, sep);
+    const m = hrp.match(/([0-9]+)([munp]?)$/);
+    if (!m) return null; // no amount → amountless
+    const value = parseInt(m[1], 10);
+    const satsPer: Record<string, number> = { m: 1e5, u: 100, n: 0.1, p: 1e-4, '': 1e8 };
+    return Math.round(value * satsPer[m[2]]);
   } catch {
     return null;
   }
