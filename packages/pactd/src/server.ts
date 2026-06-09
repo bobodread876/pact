@@ -15,10 +15,11 @@ import {
 
 import { ownsPaymentHash, recordPaymentHash } from './ledger.js';
 import { lightningFrom } from './lightning.js';
+import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.8.0';
+export const VERSION = '0.9.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
 // Wallet provider: configured at runtime (via the UI / POST /wallet/connect,
@@ -29,11 +30,10 @@ let lightning = lightningFrom(loadNwcUri());
 // Only enforced when a wallet is connected (otherwise there's no way to collect).
 const VERIFY_PRICE_SATS = Math.max(0, Math.floor(Number(process.env.PACT_VERIFY_PRICE_SATS) || 0));
 
-// Default relay set. PACT_RELAYS (comma-separated) overrides the public defaults
-// — a self-hosted stack points this at its own bundled relay.
-const RELAYS = process.env.PACT_RELAYS
-  ? process.env.PACT_RELAYS.split(',').map((r) => r.trim()).filter(Boolean)
-  : DEFAULT_RELAYS;
+// Active relay set. Resolution: relays.json (set via the UI / POST /relays) >
+// PACT_RELAYS env > the protocol defaults. Mutable so it can be (re)configured
+// at runtime — pick public relays, a bundled relay, or another relay app.
+let RELAYS = resolveRelays();
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -245,6 +245,29 @@ export function createDaemon() {
         const fetched = await ln.listTransactions({ limit: all ? limit : 200, unpaid });
         const transactions = all ? fetched : fetched.filter((t) => ownsPaymentHash(t.paymentHash)).slice(0, limit);
         return json(res, 200, { scope: all ? 'all' : 'pact', count: transactions.length, transactions });
+      }
+
+      // --- relays (where bonds are published/resolved) ---
+      if (path === '/relays' && method === 'GET') {
+        return json(res, 200, {
+          relays: RELAYS,
+          custom: relaysAreCustom(),
+          default: DEFAULT_RELAYS,
+        });
+      }
+      if (path === '/relays' && method === 'POST') {
+        const body = await readJson(req);
+        if (!Array.isArray(body.relays)) return json(res, 400, { error: 'relays (array of ws:// or wss:// URLs) required' });
+        const relays = (body.relays as unknown[])
+          .filter((r): r is string => typeof r === 'string')
+          .map((r) => r.trim())
+          .filter(Boolean);
+        if (relays.length === 0) return json(res, 400, { error: 'at least one relay URL required' });
+        const bad = relays.find((r) => !/^wss?:\/\//.test(r));
+        if (bad) return json(res, 400, { error: `invalid relay URL (must start with ws:// or wss://): ${bad}` });
+        saveRelays(relays);
+        RELAYS = relays;
+        return json(res, 200, { relays: RELAYS, custom: true });
       }
 
       // --- event stream (inbox / heartbeat) ---

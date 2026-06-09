@@ -6,9 +6,21 @@ services:
       APP_HOST: pact-pactd_web_1
       APP_PORT: 8787
 
+  # Bundled Nostr relay (strfry, multi-arch) — your bonds can live entirely on
+  # your own box. pactd defaults to it (PACT_RELAYS below). To use a different
+  # relay instead (public, or another Umbrel Nostr relay app), set it from the
+  # Pact UI's "Relays" card — that overrides this default and persists.
+  relay:
+    image: ghcr.io/bobodread876/pact-relay:latest
+    restart: on-failure
+    volumes:
+      - ${APP_DATA_DIR}/relay:/data
+
   web:
     image: ghcr.io/bobodread876/pactd:latest
     restart: on-failure
+    depends_on:
+      - relay
     environment:
       PACT_HOST: 0.0.0.0
       PACT_PORT: "8787"
@@ -19,8 +31,10 @@ services:
       # The host-mapped direct port (below), so the UI's "Connect an agent"
       # command shows the right URL instead of the app_proxy login port.
       PACT_PUBLIC_PORT: "3737"
-      # Optional: your own relay (e.g. an Umbrel Nostr relay app); else public relays.
-      # PACT_RELAYS: ws://<relay-host>:<port>
+      # Default to the bundled relay above (fully local/sovereign). Override from
+      # the Pact UI's "Relays" card — e.g. point at another Umbrel Nostr relay
+      # app, or public relays. The UI setting persists and takes precedence.
+      PACT_RELAYS: ws://relay:7777
       # Optional: paid-verification price.
       # PACT_VERIFY_PRICE_SATS: "0"
       # Connect your Lightning wallet from the Pact UI (paste an Alby Hub NWC URI) —
