@@ -16,7 +16,7 @@ import {
 import { ownsPaymentHash, recordPaymentHash } from './ledger.js';
 import { lightningFromEnv } from './lightning.js';
 
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
 const lightning = lightningFromEnv(); // null unless PACT_NWC is set
@@ -175,7 +175,8 @@ export function createDaemon() {
         if (!lightning) return json(res, 200, { connected: false, hint: 'set PACT_NWC to a nostr+walletconnect:// URI' });
         const info = await lightning.getInfo().catch((e) => ({ error: String(e) }));
         const balanceSats = await lightning.getBalanceSats().catch(() => null);
-        return json(res, 200, { connected: true, balanceSats, info });
+        const capabilities = await lightning.getCapabilities().catch(() => null);
+        return json(res, 200, { connected: true, balanceSats, capabilities, info });
       }
       if (path === '/wallet/invoice' && method === 'POST') {
         if (!lightning) return json(res, 400, { error: 'no wallet connected — set PACT_NWC' });
