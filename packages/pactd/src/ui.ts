@@ -3,8 +3,16 @@
 // On Umbrel it's reached through app_proxy (Umbrel auth); the optional bearer
 // token (if PACT_TOKEN is set) is injected so the UI's API calls authenticate.
 
-export function renderUI(token: string | undefined, publicPort?: string, relayPublicPort?: string): string {
-  const tokenJson = JSON.stringify(token ?? '');
+export function renderUI(
+  token: string | undefined,
+  publicPort?: string,
+  relayPublicPort?: string,
+  publicMode = false,
+): string {
+  // In public mode the token is NEVER written into the page (the operator enters
+  // it; agents read it from the node config). Otherwise it's injected so the UI's
+  // same-origin API calls authenticate — fine behind a trusted LAN / app login.
+  const tokenLiteral = publicMode ? '""' : JSON.stringify(token ?? '');
   const publicPortJson = JSON.stringify(publicPort ?? '');
   const relayPublicPortJson = JSON.stringify(relayPublicPort ?? '');
   return `<!doctype html>
@@ -44,6 +52,7 @@ export function renderUI(token: string | undefined, publicPort?: string, relayPu
     <div><h1>Pact</h1><div class="badge" id="ver">the agent relationship layer</div></div>
   </header>
 
+  <div class="card" id="unlock-card" style="display:none"><h2>Locked</h2><div id="unlock"></div></div>
   <div class="card" id="identity-card"><h2>Identity</h2><div id="identity">Loading…</div></div>
   <div class="card" id="wallet-card"><h2>Lightning wallet</h2><div id="wallet">Loading…</div></div>
   <div class="card" id="bonds-card"><h2>Bonds</h2><div id="bonds">Loading…</div></div>
@@ -57,7 +66,10 @@ export function renderUI(token: string | undefined, publicPort?: string, relayPu
 </div>
 
 <script>
-const TOKEN = ${tokenJson};
+const PUBLIC_MODE = ${publicMode ? 'true' : 'false'};
+// Public mode: token comes from the operator (cached in sessionStorage), never
+// from the page. Otherwise it's the injected token (empty string in public mode).
+let TOKEN = PUBLIC_MODE ? (sessionStorage.getItem('pact_token') || '') : ${tokenLiteral};
 const PUBLIC_PORT = ${publicPortJson};
 const RELAY_PUBLIC_PORT = ${relayPublicPortJson};
 async function api(method, path, body) {
@@ -69,11 +81,37 @@ async function api(method, path, body) {
 const el = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
+const DATA_CARDS = ['identity-card', 'wallet-card', 'bonds-card', 'relays-card'];
+function showUnlock(msg) {
+  DATA_CARDS.concat('agent-card').forEach(c => { el(c).style.display = 'none'; });
+  el('unlock-card').style.display = '';
+  el('unlock').innerHTML =
+    '<p class="muted">' + (msg || 'This node runs in public mode — its access token is never shown on this page. Enter it (it lives in your node config) to manage the node:') + '</p>' +
+    '<input id="tok" type="password" placeholder="access token" autocomplete="off" />' +
+    '<div class="row"><button id="unlock-btn">Unlock</button></div>';
+  el('unlock-btn').onclick = () => {
+    const t = el('tok').value.trim();
+    if (!t) return;
+    sessionStorage.setItem('pact_token', t);
+    TOKEN = t;
+    el('unlock-card').style.display = 'none';
+    refresh();
+  };
+}
+
 async function refresh() {
   const health = await api('GET', '/healthz');
   el('ver').textContent = 'the agent relationship layer · v' + (health.version || '?');
 
+  if (PUBLIC_MODE && !TOKEN) { showUnlock(); return; }
+
   const id = await api('GET', '/identity');
+  if (PUBLIC_MODE && id && id.error === 'unauthorized') {
+    sessionStorage.removeItem('pact_token'); TOKEN = '';
+    showUnlock('That token was rejected — check it and try again.');
+    return;
+  }
+  DATA_CARDS.forEach(c => { el(c).style.display = ''; });
   if (id && id.did) {
     el('identity').innerHTML =
       '<div class="kv"><span class="k">did</span><span class="v">' + esc(id.did) + '</span></div>' +
@@ -144,10 +182,18 @@ async function refresh() {
   if (TOKEN) {
     el('agent-card').style.display = '';
     const origin = PUBLIC_PORT ? (location.protocol + '//' + location.hostname + ':' + PUBLIC_PORT) : location.origin;
-    el('agent').innerHTML =
-      '<p class="muted">Point an MCP agent (Claude Code) at this node\\'s direct/API URL (bypasses the app login):</p>' +
-      '<div class="kv"><span class="k">access token</span><span class="v">' + esc(TOKEN) + '</span></div>' +
-      '<div class="badge muted" style="margin-top:10px">claude mcp add pact --env PACT_DAEMON_URL=' + esc(origin) + ' --env PACT_TOKEN=' + esc(TOKEN) + ' -- npx -y pact-mcp</div>';
+    if (PUBLIC_MODE) {
+      el('agent').innerHTML =
+        '<p class="muted">Public mode — the access token is not shown on this page. Take it from your node config (the <code>PACT_TOKEN</code> you set, or <code>PACT_HOME/token</code>) and pass it to your agent:</p>' +
+        '<div class="badge muted">claude mcp add pact --env PACT_DAEMON_URL=' + esc(origin) + ' --env PACT_TOKEN=&lt;your-token&gt; -- npx -y pact-mcp</div>' +
+        '<div class="row"><button class="secondary" id="lock-btn">Lock this UI</button></div>';
+      el('lock-btn').onclick = () => { sessionStorage.removeItem('pact_token'); location.reload(); };
+    } else {
+      el('agent').innerHTML =
+        '<p class="muted">Point an MCP agent (Claude Code) at this node\\'s direct/API URL (bypasses the app login):</p>' +
+        '<div class="kv"><span class="k">access token</span><span class="v">' + esc(TOKEN) + '</span></div>' +
+        '<div class="badge muted" style="margin-top:10px">claude mcp add pact --env PACT_DAEMON_URL=' + esc(origin) + ' --env PACT_TOKEN=' + esc(TOKEN) + ' -- npx -y pact-mcp</div>';
+    }
   }
 }
 refresh();
