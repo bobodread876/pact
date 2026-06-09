@@ -1,6 +1,6 @@
 {
   "name": "@pact/pactd",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "pactd — the Pact sidecar daemon: run the agent-relationship layer alongside any agent platform over localhost HTTP.",
   "license": "Apache-2.0",
   "type": "module",

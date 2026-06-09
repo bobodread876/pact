@@ -52,6 +52,16 @@ export interface WalletTransaction {
   createdAt?: number;
 }
 
+/** What a connected wallet backend can do — the start of Pact's per-wallet policy layer. */
+export interface WalletCapabilities {
+  /** NWC methods the wallet advertises (from get_info). */
+  methods: string[];
+  /** Best-effort backend label (e.g. "phoenixd", "alby-hub", "unknown"). */
+  backend: string;
+  /** Whether this backend can pay amountless (0-amount) bolt11 invoices. */
+  canPayAmountless: boolean;
+}
+
 export interface LightningProvider {
   getInfo(): Promise<Record<string, unknown>>;
   getBalanceSats(): Promise<number>;
@@ -59,6 +69,7 @@ export interface LightningProvider {
   payInvoice(invoice: string, amountSats?: number): Promise<Payment>;
   lookupInvoice(opts: { invoice?: string; paymentHash?: string }): Promise<{ paid: boolean } & Record<string, unknown>>;
   listTransactions(opts?: { limit?: number; unpaid?: boolean }): Promise<WalletTransaction[]>;
+  getCapabilities(): Promise<WalletCapabilities>;
 }
 
 interface NwcConnection {
@@ -68,6 +79,8 @@ interface NwcConnection {
 }
 
 export class NwcProvider implements LightningProvider {
+  private infoCache?: Record<string, unknown>;
+
   private constructor(private readonly conn: NwcConnection) {}
 
   static fromUri(uri: string): NwcProvider {
@@ -85,6 +98,15 @@ export class NwcProvider implements LightningProvider {
     return this.request('get_info', {});
   }
 
+  private async getInfoCached(): Promise<Record<string, unknown>> {
+    if (!this.infoCache) this.infoCache = await this.getInfo();
+    return this.infoCache;
+  }
+
+  async getCapabilities(): Promise<WalletCapabilities> {
+    return capabilitiesFromInfo(await this.getInfoCached());
+  }
+
   async getBalanceSats(): Promise<number> {
     const r = await this.request('get_balance', {});
     return Math.floor((Number(r.balance) || 0) / 1000);
@@ -98,9 +120,17 @@ export class NwcProvider implements LightningProvider {
   async payInvoice(invoice: string, amountSats?: number): Promise<Payment> {
     const paymentHash = paymentHashFromInvoice(invoice) ?? undefined;
 
-    // Amountless invoices require an explicit amount; reject up front otherwise.
+    // Amountless invoices: gate on backend capability + require an explicit amount.
     const params: Record<string, unknown> = { invoice };
     if (invoiceAmountSats(invoice) == null) {
+      const caps = await this.getCapabilities();
+      if (!caps.canPayAmountless) {
+        return {
+          status: 'failed',
+          error: `this wallet backend (${caps.backend}) cannot pay amountless invoices — ask the payee for a fixed-amount invoice`,
+          paymentHash,
+        };
+      }
       if (!amountSats || amountSats <= 0) {
         return {
           status: 'failed',
@@ -346,4 +376,31 @@ function fiveBitToBytes(words: number[]): Uint8Array {
     }
   }
   return Uint8Array.from(out);
+}
+
+// --- Wallet capability / policy detection -----------------------------------
+// The start of Pact's per-wallet policy layer: detect the backend and apply
+// known quirks, so Pact never submits operations a backend can't perform.
+
+const BACKEND_QUIRKS: Record<string, { canPayAmountless: boolean }> = {
+  // phoenixd (often fronted by Alby Hub) rejects 0-amount invoices outright.
+  phoenixd: { canPayAmountless: false },
+};
+
+function detectBackend(info: Record<string, unknown>): string {
+  const alias = String(info.alias ?? '').toLowerCase();
+  if (alias.includes('phoenix')) return 'phoenixd';
+  const methods = Array.isArray(info.methods) ? (info.methods as unknown[]).map(String) : [];
+  if (methods.includes('get_budget') || methods.includes('multi_pay_invoice')) return 'alby-hub';
+  return 'unknown';
+}
+
+export function capabilitiesFromInfo(info: Record<string, unknown>): WalletCapabilities {
+  const methods = Array.isArray(info.methods) ? (info.methods as unknown[]).map(String) : [];
+  const backend = detectBackend(info);
+  const quirk = BACKEND_QUIRKS[backend];
+  // Operator override (per deployment): PACT_WALLET_AMOUNTLESS=true|false wins.
+  const override = process.env.PACT_WALLET_AMOUNTLESS;
+  const canPayAmountless = override != null ? override === 'true' : quirk ? quirk.canPayAmountless : true;
+  return { methods, backend, canPayAmountless };
 }
