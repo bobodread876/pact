@@ -16,12 +16,15 @@ import {
 import { ownsPaymentHash, recordPaymentHash } from './ledger.js';
 import { lightningFrom } from './lightning.js';
 import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
+import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.10.0';
+export const VERSION = '0.11.0';
 
-const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
+// Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
+// token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
+const TOKEN = resolveToken();
 // Wallet provider: configured at runtime (via the UI / POST /wallet/connect,
 // persisted in PACT_HOME) or from PACT_NWC. Mutable so it can be (re)connected.
 let lightning = lightningFrom(loadNwcUri());
