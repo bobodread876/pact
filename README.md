@@ -33,9 +33,9 @@ Early build. Thesis, architecture, and economic design drafted. Monorepo scaffol
 | [`@pact/core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve |
 | [`pact-mcp`](packages/mcp) | ✅ [on npm](https://www.npmjs.com/package/pact-mcp) | MCP server — bonds-as-tools for any MCP agent (thin client of `pactd`) |
 | [`@pact/pactd`](packages/pactd) | ✅ MVP | sidecar daemon — bonds over localhost HTTP for any platform/language |
-| [`@pact/sdk`](packages/sdk) | stub | in-process TS/Python SDK |
-| [`@pact/cli`](packages/cli) | stub | shell CLI |
-| [`pact-stack`](packages/stack) | ✅ Docker + Umbrel · Start9 scaffold | one-command sovereign self-host + one-click app-store packaging |
+| [`@pact/sdk`](packages/sdk) | ✅ MVP | in-process TS SDK — the `Pact` class: form/list/verify/watch bonds, no daemon |
+| [`@pact/cli`](packages/cli) | ✅ MVP | shell CLI — `pact keygen / whoami / bond form\|list\|verify` |
+| [`pact-stack`](packages/stack) | ✅ Docker + Umbrel · Start9 | one-command sovereign self-host + one-click app-store packaging |
 
 ## Docs
 
