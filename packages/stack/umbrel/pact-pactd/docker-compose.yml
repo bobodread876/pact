@@ -12,11 +12,19 @@ services:
     environment:
       PACT_HOST: 0.0.0.0
       PACT_PORT: "8787"
-      # Optional: point at your own relay (e.g. an Umbrel Nostr relay app).
-      # Defaults to public relays if unset.
+      # Bearer token for external/agent API access — deterministic per-install,
+      # derived from the app's Umbrel seed. Shown in the Pact UI's "Connect an
+      # agent" panel (behind Umbrel login).
+      PACT_TOKEN: ${APP_SEED}
+      # Optional: your own relay (e.g. an Umbrel Nostr relay app); else public relays.
       # PACT_RELAYS: ws://<relay-host>:<port>
-      # Optional: non-custodial sats via Nostr Wallet Connect.
-      # PACT_NWC: nostr+walletconnect://...
+      # Optional: paid-verification price.
       # PACT_VERIFY_PRICE_SATS: "0"
+      # Connect your Lightning wallet from the Pact UI (paste an Alby Hub NWC URI) —
+      # no env editing needed.
+    # Direct host port for external/agent access (token-required). Keep on a
+    # trusted LAN. The web UI is also at the Umbrel app URL (behind Umbrel login).
+    ports:
+      - "3737:8787"
     volumes:
       - ${APP_DATA_DIR}/data:/data
