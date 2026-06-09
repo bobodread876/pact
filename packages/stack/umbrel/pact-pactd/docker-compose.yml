@@ -41,10 +41,12 @@ services:
       # The host-mapped relay port, so the UI shows the shareable bundled-relay
       # URL (ws://<host>:7777) that other agents / a reverse proxy can use.
       PACT_RELAY_PUBLIC_PORT: "7777"
-      # Default to the bundled relay above (fully local/sovereign). Override from
-      # the Pact UI's "Relays" card — e.g. point at another Umbrel Nostr relay
-      # app, or public relays. The UI setting persists and takes precedence.
-      PACT_RELAYS: ws://relay:7777
+      # Default to the bundled relay (your own on-box copy) PLUS the public
+      # defaults, so a fresh install is both sovereign and interoperable — bonds
+      # with off-box agents resolve out of the box. Narrow this to just the
+      # bundled relay (fully local) or change it entirely from the Pact UI's
+      # "Relays" card; the UI setting persists and takes precedence.
+      PACT_RELAYS: ws://relay:7777,wss://relay.islandbitcoin.com,wss://relay.damus.io,wss://nos.lol
       # Optional: paid-verification price.
       # PACT_VERIFY_PRICE_SATS: "0"
       # Connect your Lightning wallet from the Pact UI (paste an Alby Hub NWC URI) —
