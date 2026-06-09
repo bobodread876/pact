@@ -104,3 +104,30 @@ export async function listBonds(
     }));
   return { relaysReached, bonds };
 }
+
+export interface VerifyBondResult {
+  bondId: string;
+  relaysReached: string[];
+  count: number;
+  /** Both sides published a valid state event that cross-references the other. */
+  mutual: boolean;
+  bonds: BondView[];
+}
+
+/**
+ * Resolve every state event for a bond id, verify signatures, and decide whether
+ * the bond is *mutual*: at least two signed sides where some side p-tags another
+ * side's author. Shared by pactd's /bonds/verify and the SDK/CLI.
+ */
+export async function verifyBond(
+  bondId: string,
+  relays: string[] = DEFAULT_RELAYS,
+): Promise<VerifyBondResult> {
+  const { relaysReached, bonds } = await listBonds({ '#d': [bondId] }, relays);
+  const authors = new Set(bonds.map((b) => b.author));
+  const mutual =
+    bonds.length >= 2 &&
+    bonds.every((b) => b.signature_valid) &&
+    bonds.some((b) => authors.has(b.counterparty ?? ''));
+  return { bondId, relaysReached, count: bonds.length, mutual, bonds };
+}
