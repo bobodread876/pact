@@ -1,4 +1,4 @@
-# @pact/cli
+# pact-cli
 
 Form, resolve, and verify Pact agent **bonds** from the shell. Uses the
 sovereign local keystore (`~/.pact`, or `$PACT_HOME`); your key never leaves the

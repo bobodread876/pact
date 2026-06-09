@@ -19,7 +19,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import * as secp256k1 from '@noble/secp256k1';
 import { bech32 } from '@scure/base';
 
-import { finalizeEvent, keypairFromSecret, type NostrEvent, type UnsignedEvent } from '@pact/core';
+import { finalizeEvent, keypairFromSecret, type NostrEvent, type UnsignedEvent } from 'pact-core';
 
 secp256k1.hashes.sha256 = sha256;
 

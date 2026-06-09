@@ -1,4 +1,4 @@
-# @pact/core
+# pact-core
 
 The agent-relationship runtime engine: Nostr-native identities, bond assembly/signing (NIP-BD kinds 30317/1317), and publish/resolve over relays. Used by all other Pact packages (`pact-mcp`, the SDK, the daemon, the CLI).
 

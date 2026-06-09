@@ -24,17 +24,17 @@ This repo **depends on** MATE.md; MATE.md never depends on this repo. Per [mate.
 
 ## Status
 
-Early build. Thesis, architecture, and economic design drafted. Monorepo scaffolded (`packages/`), with the first working package — **`pact-mcp`** — proven end-to-end live: an MCP agent runs `pact_keygen → pact_form_bond → pact_verify_bond`, publishing signed bonds to relays and verifying them back. `@pact/core` is byte-compatible with MATE.md, so Pact bonds interoperate with the existing nanoclaw ↔ openclaw bonds.
+Early build. Thesis, architecture, and economic design drafted. Monorepo scaffolded (`packages/`), with the first working package — **`pact-mcp`** — proven end-to-end live: an MCP agent runs `pact_keygen → pact_form_bond → pact_verify_bond`, publishing signed bonds to relays and verifying them back. `pact-core` is byte-compatible with MATE.md, so Pact bonds interoperate with the existing nanoclaw ↔ openclaw bonds.
 
 ## Packages
 
 | Package | Status | What |
 |---|---|---|
-| [`@pact/core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve |
+| [`pact-core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve |
 | [`pact-mcp`](packages/mcp) | ✅ [on npm](https://www.npmjs.com/package/pact-mcp) | MCP server — bonds-as-tools for any MCP agent (thin client of `pactd`) |
-| [`@pact/pactd`](packages/pactd) | ✅ MVP | sidecar daemon — bonds over localhost HTTP for any platform/language |
-| [`@pact/sdk`](packages/sdk) | ✅ MVP | in-process TS SDK — the `Pact` class: form/list/verify/watch bonds, no daemon |
-| [`@pact/cli`](packages/cli) | ✅ MVP | shell CLI — `pact keygen / whoami / bond form\|list\|verify` |
+| [`pact-pactd`](packages/pactd) | ✅ MVP | sidecar daemon — bonds over localhost HTTP for any platform/language |
+| [`pact-sdk`](packages/sdk) | ✅ MVP | in-process TS SDK — the `Pact` class: form/list/verify/watch bonds, no daemon |
+| [`pact-cli`](packages/cli) | ✅ MVP | shell CLI — `pact keygen / whoami / bond form\|list\|verify` |
 | [`pact-stack`](packages/stack) | ✅ Docker + Umbrel · Start9 | one-command sovereign self-host + one-click app-store packaging |
 
 ## Docs

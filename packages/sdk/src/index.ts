@@ -1,4 +1,4 @@
-// @pact/sdk — embed Pact bonds directly in your TypeScript agent, in-process.
+// pact-sdk — embed Pact bonds directly in your TypeScript agent, in-process.
 // No daemon, no MCP server: bring your own key (a raw secret, an nsec, or the
 // sovereign local ~/.pact keystore) and form / resolve / verify bonds over Nostr.
 
@@ -18,9 +18,9 @@ import {
   type BondView,
   type FormBondResult,
   type VerifyBondResult,
-} from '@pact/core';
+} from 'pact-core';
 
-export type { BondState, BondView, FormBondResult, VerifyBondResult } from '@pact/core';
+export type { BondState, BondView, FormBondResult, VerifyBondResult } from 'pact-core';
 
 export interface PactOptions {
   /** Relays to publish/resolve on. Defaults to the protocol's default relays. */

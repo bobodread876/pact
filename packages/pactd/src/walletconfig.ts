@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { pactHome } from '@pact/core';
+import { pactHome } from 'pact-core';
 
 function configPath(): string {
   return join(pactHome(), 'wallet.json');

@@ -1,5 +1,5 @@
 {
-  "name": "@pact/pactd",
+  "name": "pact-pactd",
   "version": "0.12.1",
   "description": "pactd — the Pact sidecar daemon: run the agent-relationship layer alongside any agent platform over localhost HTTP.",
   "license": "Apache-2.0",
@@ -16,6 +16,6 @@
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@scure/base": "^2.0.0",
-    "@pact/core": "0.1.0"
+    "pact-core": "^0.1.0"
   }
 }

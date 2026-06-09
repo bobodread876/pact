@@ -11,7 +11,7 @@ import {
   pubkeyHexFromIdentity,
   type BondState,
   type RelayFilter,
-} from '@pact/core';
+} from 'pact-core';
 
 import { ownsPaymentHash, recordPaymentHash } from './ledger.js';
 import { lightningFrom } from './lightning.js';

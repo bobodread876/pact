@@ -1,5 +1,5 @@
 {
-  "name": "@pact/core",
+  "name": "pact-core",
   "version": "0.1.0",
   "description": "Pact Core — the agent-relationship runtime engine (bonds over Nostr).",
   "license": "Apache-2.0",
