@@ -9,6 +9,7 @@ export { makeBondDocument, type BondState, type MakeBondOptions } from './bond.j
 export * from './keystore.js';
 
 import {
+  BOND_TAG,
   DEFAULT_RELAYS,
   buildBondHistoryEvent,
   buildBondStateEvent,
@@ -90,7 +91,14 @@ export async function listBonds(
   filter: Pick<RelayFilter, 'authors' | '#d' | '#p'>,
   relays: string[] = DEFAULT_RELAYS,
 ): Promise<{ relaysReached: string[]; bonds: BondView[] }> {
-  const { events, relaysReached } = await resolveEvents(relays, { kinds: [30317], limit: 50, ...filter });
+  // #t scopes the query to MATE bonds — kinds 30317/1317 are unallocated, so
+  // filtering by the discriminator tag avoids resolving unrelated apps' events.
+  const { events, relaysReached } = await resolveEvents(relays, {
+    kinds: [30317],
+    '#t': [BOND_TAG],
+    limit: 50,
+    ...filter,
+  });
   const bonds = events
     .sort((a, b) => b.created_at - a.created_at)
     .map((event: NostrEvent) => ({
