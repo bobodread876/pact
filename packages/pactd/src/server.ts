@@ -19,7 +19,7 @@ import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.9.0';
+export const VERSION = '0.10.0';
 
 const TOKEN = process.env.PACT_TOKEN; // optional bearer token for local access control
 // Wallet provider: configured at runtime (via the UI / POST /wallet/connect,
@@ -84,7 +84,7 @@ export function createDaemon() {
       // for its API calls; on Umbrel the page is behind app_proxy).
       if (path === '/' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(renderUI(TOKEN, process.env.PACT_PUBLIC_PORT));
+        return res.end(renderUI(TOKEN, process.env.PACT_PUBLIC_PORT, process.env.PACT_RELAY_PUBLIC_PORT));
       }
       if (path === '/healthz') {
         return json(res, 200, {

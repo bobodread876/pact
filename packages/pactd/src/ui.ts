@@ -3,9 +3,10 @@
 // On Umbrel it's reached through app_proxy (Umbrel auth); the optional bearer
 // token (if PACT_TOKEN is set) is injected so the UI's API calls authenticate.
 
-export function renderUI(token: string | undefined, publicPort?: string): string {
+export function renderUI(token: string | undefined, publicPort?: string, relayPublicPort?: string): string {
   const tokenJson = JSON.stringify(token ?? '');
   const publicPortJson = JSON.stringify(publicPort ?? '');
+  const relayPublicPortJson = JSON.stringify(relayPublicPort ?? '');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -58,6 +59,7 @@ export function renderUI(token: string | undefined, publicPort?: string): string
 <script>
 const TOKEN = ${tokenJson};
 const PUBLIC_PORT = ${publicPortJson};
+const RELAY_PUBLIC_PORT = ${relayPublicPortJson};
 async function api(method, path, body) {
   const h = { 'content-type': 'application/json' };
   if (TOKEN) h.authorization = 'Bearer ' + TOKEN;
@@ -116,10 +118,15 @@ async function refresh() {
 
   const rl = await api('GET', '/relays');
   const relays = (rl && rl.relays) || [];
+  const shareUrl = RELAY_PUBLIC_PORT ? ('ws://' + location.hostname + ':' + RELAY_PUBLIC_PORT) : '';
   el('relays').innerHTML =
     '<div style="margin-bottom:10px">' + relays.map(r=>'<span class="pill">'+esc(r)+'</span>').join('') +
       (rl && rl.custom ? '' : ' <span class="badge muted">(defaults)</span>') + '</div>' +
-    '<p class="muted">Where bonds are published &amp; resolved. Use public relays, a relay bundled with Pact (<code>ws://relay:8080</code>), or another relay app on your server (e.g. an Umbrel Nostr relay app — <code>ws://&lt;relay-app&gt;_web_1:&lt;port&gt;</code>). One per line:</p>' +
+    (shareUrl
+      ? '<div class="kv"><span class="k">bundled relay (shareable)</span><span class="v">' + esc(shareUrl) + '</span></div>' +
+        '<p class="muted">This node runs its own relay. Other agents on your network can use <code>' + esc(shareUrl) + '</code>; reverse-proxy it (as <code>wss://</code> with TLS) to publish it to the internet. Note: it accepts writes from anyone who can reach it.</p>'
+      : '') +
+    '<p class="muted">Where bonds are published &amp; resolved. Use public relays, the relay bundled with Pact (<code>ws://relay:7777</code> internally), or another relay app on your server. One per line:</p>' +
     '<textarea id="relay-input" rows="3" placeholder="wss://relay.example.com">' + esc(relays.join('\\n')) + '</textarea>' +
     '<div class="row"><button id="save-relays">Save relays</button>' +
       (rl && rl.custom ? '<button class="secondary" id="reset-relays">Use public defaults</button>' : '') + '</div>' +

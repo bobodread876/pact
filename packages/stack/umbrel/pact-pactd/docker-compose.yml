@@ -15,6 +15,13 @@ services:
     restart: on-failure
     volumes:
       - ${APP_DATA_DIR}/relay:/data
+    # Publish on the host so the bundled relay is reachable at
+    # ws://<umbrel-host>:7777 — usable by other agents on your network, and
+    # reverse-proxyable (as wss:// with TLS) to the public internet. pactd itself
+    # still reaches it internally as `relay:7777` (containers can't resolve
+    # .local). Open relay (no auth) — keep on a trusted LAN unless proxied.
+    ports:
+      - "7777:7777"
 
   web:
     image: ghcr.io/bobodread876/pactd:latest
@@ -31,6 +38,9 @@ services:
       # The host-mapped direct port (below), so the UI's "Connect an agent"
       # command shows the right URL instead of the app_proxy login port.
       PACT_PUBLIC_PORT: "3737"
+      # The host-mapped relay port, so the UI shows the shareable bundled-relay
+      # URL (ws://<host>:7777) that other agents / a reverse proxy can use.
+      PACT_RELAY_PUBLIC_PORT: "7777"
       # Default to the bundled relay above (fully local/sovereign). Override from
       # the Pact UI's "Relays" card — e.g. point at another Umbrel Nostr relay
       # app, or public relays. The UI setting persists and takes precedence.
