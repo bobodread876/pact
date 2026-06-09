@@ -3,8 +3,9 @@
 // On Umbrel it's reached through app_proxy (Umbrel auth); the optional bearer
 // token (if PACT_TOKEN is set) is injected so the UI's API calls authenticate.
 
-export function renderUI(token: string | undefined): string {
+export function renderUI(token: string | undefined, publicPort?: string): string {
   const tokenJson = JSON.stringify(token ?? '');
+  const publicPortJson = JSON.stringify(publicPort ?? '');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -55,6 +56,7 @@ export function renderUI(token: string | undefined): string {
 
 <script>
 const TOKEN = ${tokenJson};
+const PUBLIC_PORT = ${publicPortJson};
 async function api(method, path, body) {
   const h = { 'content-type': 'application/json' };
   if (TOKEN) h.authorization = 'Bearer ' + TOKEN;
@@ -113,9 +115,9 @@ async function refresh() {
 
   if (TOKEN) {
     el('agent-card').style.display = '';
-    const origin = location.origin;
+    const origin = PUBLIC_PORT ? (location.protocol + '//' + location.hostname + ':' + PUBLIC_PORT) : location.origin;
     el('agent').innerHTML =
-      '<p class="muted">Point an MCP agent (Claude Code) at this node. Use the node\\'s direct/API URL (not the app_proxy login URL):</p>' +
+      '<p class="muted">Point an MCP agent (Claude Code) at this node\\'s direct/API URL (bypasses the app login):</p>' +
       '<div class="kv"><span class="k">access token</span><span class="v">' + esc(TOKEN) + '</span></div>' +
       '<div class="badge muted" style="margin-top:10px">claude mcp add pact --env PACT_DAEMON_URL=' + esc(origin) + ' --env PACT_TOKEN=' + esc(TOKEN) + ' -- npx -y pact-mcp</div>';
   }
