@@ -1,29 +1,59 @@
-# Pact — Start9 (StartOS) package *(scaffold)*
+# Pact — Start9 (StartOS) package
 
-One-click install of `pactd` on [Start9 / StartOS](https://start9.com). Unlike Umbrel (plain YAML + compose), a StartOS package is compiled into a signed **`.s9pk`** with the **[start-sdk](https://docs.start9.com)** (StartOS 0.4.0 uses a TypeScript SDK). This directory is a **scaffold + build guide**, not a finished `.s9pk`.
+One-click, self-sovereign install of `pactd` on [Start9 / StartOS](https://start9.com).
 
-## What the package wraps
+Unlike Umbrel (plain YAML + compose), a StartOS service is compiled into a
+signed **`.s9pk`** with the **[start-sdk](https://docs.start9.com)** (TypeScript).
+This directory **is** that package — authored against `@start9labs/start-sdk@1.5.3`
+(StartOS 0.3.6). It wraps the published multi-arch image
+`ghcr.io/bobodread876/pactd` (x86_64 + aarch64), so there's no source build.
 
-- **Image:** `ghcr.io/bobodread876/pactd:latest` (publish first — see `../README.md`).
-- **Main process:** `node packages/pactd/dist/index.js`, listening on `0.0.0.0:8787`.
-- **Health check:** HTTP `GET /healthz` → `{ ok: true }`.
-- **Persistence:** the `/data` volume (key + local bond store).
-- **Config (StartOS config form → env):**
-  - `PACT_RELAYS` — default to the user's own StartOS Nostr relay service if installed, else public relays.
-  - `PACT_NWC` — Nostr Wallet Connect URI (non-custodial sats).
-  - `PACT_VERIFY_PRICE_SATS` — paid-verification price.
-  - `PACT_TOKEN` — bearer auth (StartOS proxies the interface in front).
-- **Interface:** a UI/API interface on port 8787 (LAN + Tor address).
+## What it does
 
-## Build steps (to produce the `.s9pk`)
+- Runs `pactd` as the service's primary daemon (`node packages/pactd/dist/index.js`).
+- Exposes one **UI/API interface** on port `8787` (StartOS gives it LAN + Tor addresses).
+- Persists key, bonds, wallet config, and token on the **`main`** volume (`/data`).
+- Health check: the daemon's port is listening.
+- Security: pactd runs with `PACT_AUTO_TOKEN=true` — it generates and persists a
+  bearer token (StartOS has no app-seed to derive one from). The token is shown
+  in the Web UI's "Connect an agent" card and required for API access.
 
-1. Install the SDK: `npm i -g @start9labs/start-sdk` (see Start9 packaging docs for the current version).
-2. Author the StartOS package per the SDK (`startos/` with `manifest.ts`, `actions`, `health checks`, `dependencies`, plus a `Makefile`). Use the wrapped image above; map config keys → the env vars listed above; health check hits `/healthz`; mount `/data`.
-3. `make` → produces `pact.s9pk`.
-4. `start-cli package install` (sideload) or submit to the Start9 registry / a community marketplace.
+## Build the `.s9pk`
 
-References: [Start9 service packaging](https://docs.start9.com), [hello-world-startos](https://github.com/Start9Labs/hello-world-startos) (wrapper template).
+Requires the StartOS dev toolchain — **`start-cli`** (a Rust binary; see
+[Installing the SDK](https://docs.start9.com/latest/developer-guide/sdk/installing-the-sdk)),
+**Docker**, **Node/npm**, and `jq`.
 
-## Status
+```bash
+cd packages/stack/start9
+npm ci
+make            # type-checks, ncc-bundles startos/, then `start-cli s9pk pack`
+# → pactd.s9pk (universal) or pactd_x86_64.s9pk / pactd_aarch64.s9pk per arch
+```
 
-Scaffold. TODO: implement the `start-sdk` TS package (`startos/manifest.ts` + `Makefile`) and produce/publish a signed `.s9pk`. Tracked as a follow-up — the wrapped image, ports, health check, volume, and config keys above are the full spec it needs.
+First build inits a developer signing key (`start-cli init-key`). The bundle +
+type-check steps (`npm run check && npm run build`) run with just Node and are
+what's validated in this repo; only the final `start-cli s9pk pack` needs the
+Rust toolchain + Docker.
+
+### Build via CI
+
+`.github/workflows/build.yml` uses Start9's `shared-workflows` to build the
+`.s9pk` on push/PR (set a `DEV_KEY` secret = your StartOS developer key). To use
+it, this package can be split into its own repo (as the Umbrel app store was),
+since GitHub Actions only reads workflows at a repo root.
+
+## Install
+
+```bash
+# define `host: http://<your-server>.local` in ~/.startos/config.yaml, then:
+make install        # sideloads the .s9pk to your StartOS server
+```
+
+Or in the StartOS web UI: **System → Sideload Service** and upload the `.s9pk`.
+
+## Bundled relay
+
+This first cut is **pactd only** and defaults to public Nostr relays (change them
+in the Web UI's Relays card). Bundling a relay (as the Umbrel app does, via a
+second daemon) is a planned follow-up.
