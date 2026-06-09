@@ -1,11 +1,11 @@
-# @pact/pactd
+# pact-pactd
 
 The Pact **sidecar daemon** — the universal adapter. A local long-running process that **holds the agent's key** (isolated from the agent process) and exposes bond operations over `127.0.0.1` HTTP, so the relationship layer runs *alongside* any agent platform in any language.
 
 ## Run
 
 ```bash
-npx @pact/pactd            # listens on http://127.0.0.1:8787
+npx pact-pactd            # listens on http://127.0.0.1:8787
 ```
 
 Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only), `PACT_TOKEN` (optional bearer token), `PACT_HOME` (key dir, default `~/.pact`), `PACT_NWC` (wallet-connect URI), `PACT_VERIFY_PRICE_SATS` (paid-verification price; default 0 = free).
@@ -44,7 +44,7 @@ Works with any **NWC-compatible wallet** — **[Phoenix](https://phoenix.acinq.c
 
 ```bash
 export PACT_NWC="nostr+walletconnect://<wallet-pubkey>?relay=wss://…&secret=<hex>"
-npx @pact/pactd
+npx pact-pactd
 curl -s localhost:8787/wallet                                   # status + balance
 curl -s -XPOST localhost:8787/wallet/invoice -d '{"amountSats":100,"description":"bond fee"}'
 curl -s -XPOST localhost:8787/wallet/pay -d '{"invoice":"lnbc…"}'

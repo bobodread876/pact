@@ -84,7 +84,7 @@ Each is an independent install so a developer picks the integration depth that f
 
 | Package | Install | For whom | How it attaches |
 |---|---|---|---|
-| **`@pact/sdk`** (TS) / **`pact-sdk`** (Python) | `npm i @pact/sdk` · `pip install pact-sdk` | builders who want in-process control | embeds Pact Core (TS) or a thin client to `pactd` (Python) |
+| **`pact-sdk`** (TS) / **`pact-sdk`** (Python) | `npm i pact-sdk` · `pip install pact-sdk` | builders who want in-process control | embeds Pact Core (TS) or a thin client to `pactd` (Python) |
 | **`pactd`** — sidecar daemon | Docker · Homebrew · systemd · single binary | *any* agent platform, any language | long-running local process; agent talks to it over `127.0.0.1` HTTP/JSON + SSE (or Unix socket) |
 | **`pact`** — CLI | Homebrew · npm · binary | ops, scripting, sovereign users | drives the core/daemon from the shell (superset of the `mate` CLI) |
 | **`pact-mcp`** — MCP server | `npx pact-mcp` · Docker | *any MCP-capable agent* (Claude, etc.) | exposes bond ops as **MCP tools** so the agent forms/manages bonds natively |

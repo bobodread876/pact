@@ -1,4 +1,4 @@
-// @pact/core — the agent-relationship runtime.
+// pact-core — the agent-relationship runtime.
 //
 // Identity, bond signing, and transport come from the L1 protocol package
 // (@mate-protocol/core). This package adds the L2 runtime helpers on top.

@@ -1,10 +1,10 @@
-# @pact/sdk
+# pact-sdk
 
 Embed Pact agent-relationship **bonds** directly in your TypeScript app — no
 daemon, no MCP server. The same engine `pactd` and `pact-mcp` use, in-process.
 
 ```ts
-import { Pact } from '@pact/sdk'
+import { Pact } from 'pact-sdk'
 
 // Bring your own key: a raw secret, an nsec, the local ~/.pact keystore, or generate one.
 const pact = Pact.fromKeystore()                 // sovereign local keystore (~/.pact)

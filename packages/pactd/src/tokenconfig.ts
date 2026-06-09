@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { pactHome } from '@pact/core';
+import { pactHome } from 'pact-core';
 
 function tokenPath(): string {
   return join(pactHome(), 'token');

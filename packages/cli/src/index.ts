@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // pact — form, resolve, and verify agent bonds from the shell. Thin wrapper over
-// @pact/sdk, using the sovereign local keystore (~/.pact, or $PACT_HOME). Key
+// pact-sdk, using the sovereign local keystore (~/.pact, or $PACT_HOME). Key
 // never leaves the machine; relays default to the protocol defaults (override
 // with --relay, repeatable).
 
 import { parseArgs } from 'node:util';
 
-import { ensureIdentity, hasIdentity, loadIdentity } from '@pact/core';
-import { Pact, type BondView } from '@pact/sdk';
+import { ensureIdentity, hasIdentity, loadIdentity } from 'pact-core';
+import { Pact, type BondView } from 'pact-sdk';
 
 const HELP = `pact — agent relationship bonds from the shell
 
