@@ -20,7 +20,7 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.11.0';
+export const VERSION = '0.11.1';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
@@ -136,7 +136,19 @@ export function createDaemon() {
         if (author) filter.authors = [pubkeyHexFromIdentity(author)];
         if (counterparty) filter['#p'] = [pubkeyHexFromIdentity(counterparty)];
         if (bondId) filter['#d'] = [bondId];
-        if (!author && !counterparty && !bondId && hasIdentity()) filter.authors = [loadIdentity().pubkeyHex];
+        if (!author && !counterparty && !bondId) {
+          // No filter: scope to this node's own bonds. Without an identity there's
+          // nothing to scope to — return empty rather than the relays' global
+          // kind:30317 firehose (other authors' events, shown as '?' bonds).
+          if (!hasIdentity()) {
+            return json(res, 200, {
+              relaysReached: [],
+              bonds: [],
+              hint: 'no identity yet — create one (POST /identity) or filter with ?author=/counterparty=/bond_id=',
+            });
+          }
+          filter.authors = [loadIdentity().pubkeyHex];
+        }
         return json(res, 200, await listBonds(filter, relaysFrom(url)));
       }
       if (path === '/bonds/verify' && method === 'GET') {
