@@ -16,6 +16,9 @@ services:
       # derived from the app's Umbrel seed. Shown in the Pact UI's "Connect an
       # agent" panel (behind Umbrel login).
       PACT_TOKEN: ${APP_SEED}
+      # The host-mapped direct port (below), so the UI's "Connect an agent"
+      # command shows the right URL instead of the app_proxy login port.
+      PACT_PUBLIC_PORT: "3737"
       # Optional: your own relay (e.g. an Umbrel Nostr relay app); else public relays.
       # PACT_RELAYS: ws://<relay-host>:<port>
       # Optional: paid-verification price.

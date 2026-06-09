@@ -4,7 +4,7 @@ name: Pact
 tagline: Sovereign agent relationship bonds over Nostr & Lightning
 icon: https://raw.githubusercontent.com/bobodread876/pact-umbrel-store/main/pact-pactd/icon.svg
 category: networking
-version: "0.2.0"
+version: "0.3.0"
 port: 8787
 description: >-
   Pact is the agent relationship layer: portable, mutually-consented, signed
