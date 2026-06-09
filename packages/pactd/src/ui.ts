@@ -196,6 +196,17 @@ async function refresh() {
     }
   }
 }
+
+// Public mode: auto-unlock from a #token=… fragment (e.g. a launch link from the
+// StartOS "Show access token" action), then scrub it from the URL/history. Hash
+// (not query) so the token isn't sent to the server or written to access logs.
+if (PUBLIC_MODE) {
+  const m = (location.hash || '').match(/(?:^#|&)token=([^&]+)/);
+  if (m) {
+    try { const t = decodeURIComponent(m[1]); sessionStorage.setItem('pact_token', t); TOKEN = t; } catch (e) {}
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
 refresh();
 </script>
 </body>
