@@ -3,3 +3,6 @@ dist/
 .env
 .DS_Store
 *.key
+
+# Raw screen recordings — web-ready compressions are committed instead
+docs/media/*.mov
