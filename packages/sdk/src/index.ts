@@ -4,6 +4,7 @@
 
 import {
   DEFAULT_RELAYS,
+  acceptBond as coreAcceptBond,
   ensureIdentity,
   formBond as coreFormBond,
   generateNostrKeypair,
@@ -36,7 +37,8 @@ export interface PactIdentity {
 export interface FormBondArgs {
   /** Counterparty identity (did:nostr / npub / hex). */
   counterparty: string;
-  bondId: string;
+  /** Opaque bond id. Omit to auto-generate `urn:mate:<uuid>`. */
+  bondId?: string;
   /** Defaults to 'proposed'. */
   state?: BondState;
   kind?: string;
@@ -148,6 +150,25 @@ export class Pact {
   /** Resolve and verify a bond by id (mutual = both sides signed & cross-reference). */
   verifyBond(bondId: string, relays?: string[]): Promise<VerifyBondResult> {
     return coreVerifyBond(bondId, relays ?? this.relays);
+  }
+
+  /**
+   * Accept a proposed bond by echoing the proposer's id (so both sides share one
+   * `d` tag and resolve as mutual). The proposer (`counterparty`) is auto-resolved
+   * from the inbound proposal if not given. State defaults to `active`.
+   */
+  acceptBond(
+    bondId: string,
+    opts: { counterparty?: string; state?: BondState; kind?: string; history?: boolean; relays?: string[] } = {},
+  ): Promise<FormBondResult> {
+    return coreAcceptBond(this.secret, {
+      bondId,
+      counterparty: opts.counterparty,
+      state: opts.state,
+      kind: opts.kind,
+      history: opts.history,
+      relays: opts.relays ?? this.relays,
+    });
   }
 
   /**

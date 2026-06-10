@@ -2,6 +2,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 
 import {
   DEFAULT_RELAYS,
+  acceptBond,
   ensureIdentity,
   formBond,
   hasIdentity,
@@ -20,7 +21,7 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.12.2';
+export const VERSION = '0.13.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
@@ -121,13 +122,31 @@ export function createDaemon() {
       if (path === '/bonds' && method === 'POST') {
         if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
         const body = await readJson(req);
-        if (typeof body.counterparty !== 'string' || typeof body.bondId !== 'string') {
-          return json(res, 400, { error: 'counterparty and bondId (strings) are required' });
+        if (typeof body.counterparty !== 'string') {
+          return json(res, 400, { error: 'counterparty (string) is required' });
         }
         const result = await formBond(loadSecret(), {
           counterparty: body.counterparty,
-          bondId: body.bondId,
+          // Omit bondId to auto-generate urn:mate:<uuid> (the proposer's id).
+          bondId: typeof body.bondId === 'string' ? body.bondId : undefined,
           state: (typeof body.state === 'string' ? body.state : 'proposed') as BondState,
+          kind: typeof body.kind === 'string' ? body.kind : undefined,
+          relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
+          history: body.history === undefined ? true : Boolean(body.history),
+        });
+        return json(res, 200, result);
+      }
+      if (path === '/bonds/accept' && method === 'POST') {
+        if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
+        const body = await readJson(req);
+        if (typeof body.bondId !== 'string') {
+          return json(res, 400, { error: 'bondId (string) is required — the proposer\'s bond id to echo' });
+        }
+        const result = await acceptBond(loadSecret(), {
+          bondId: body.bondId,
+          // Omit counterparty to auto-resolve the proposer from the inbound proposal.
+          counterparty: typeof body.counterparty === 'string' ? body.counterparty : undefined,
+          state: (typeof body.state === 'string' ? body.state : 'active') as BondState,
           kind: typeof body.kind === 'string' ? body.kind : undefined,
           relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
           history: body.history === undefined ? true : Boolean(body.history),

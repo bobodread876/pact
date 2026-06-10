@@ -7,10 +7,11 @@ machine.
 ```sh
 pact keygen                                   # create the local identity
 pact whoami
-pact bond form did:nostr:npub1… alice~bob --state proposed
+pact bond form did:nostr:npub1…               # propose; auto id urn:mate:<uuid>
+pact bond accept urn:mate:<uuid>              # counterparty echoes the id to accept
 pact bond list                                # bonds you authored
 pact bond list --counterparty did:nostr:npub1…
-pact bond verify alice~bob                    # mutual? exit 0 if so
+pact bond verify urn:mate:<uuid>              # mutual? exit 0 if so
 ```
 
 Global flags: `--relay wss://…` (repeatable; default: protocol relays),

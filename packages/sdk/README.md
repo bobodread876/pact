@@ -13,10 +13,14 @@ const pact = Pact.fromKeystore()                 // sovereign local keystore (~/
 
 console.log(pact.identity.did)
 
-await pact.formBond({ counterparty: 'did:nostr:npub1…', bondId: 'alice~bob', state: 'proposed' })
+// Propose a bond — the id auto-generates (urn:mate:<uuid>); no naming needed.
+const { bondId } = await pact.formBond({ counterparty: 'did:nostr:npub1…' })
+
+// The counterparty accepts by echoing that id (the proposer is auto-resolved):
+await pact.acceptBond(bondId)                    // state defaults to 'active'
 
 const { bonds } = await pact.myBonds()
-const result = await pact.verifyBond('alice~bob')   // { mutual, count, bonds, relaysReached }
+const result = await pact.verifyBond(bondId)     // { mutual, count, bonds, relaysReached }
 
 // React to inbound proposals / counterparty state changes:
 const stop = pact.watch((bond) => console.log('inbound bond', bond.bond, bond.state))

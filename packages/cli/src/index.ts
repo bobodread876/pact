@@ -7,14 +7,17 @@
 import { parseArgs } from 'node:util';
 
 import { ensureIdentity, hasIdentity, loadIdentity } from 'pact-core';
-import { Pact, type BondView } from 'pact-sdk';
+import { Pact, type BondState, type BondView } from 'pact-sdk';
 
 const HELP = `pact — agent relationship bonds from the shell
 
 Usage:
   pact keygen [--force]              Create the local identity (~/.pact)
   pact whoami                        Show this node's identity
-  pact bond form <counterparty> <bondId> [--state proposed] [--kind <k>] [--no-history]
+  pact bond form <counterparty> [bondId] [--state proposed] [--kind <k>] [--no-history]
+                                     Propose a bond. Omit bondId to auto-generate urn:mate:<uuid>.
+  pact bond accept <bondId> [--from <counterparty>] [--state active]
+                                     Accept a proposed bond (echoes its id; proposer auto-resolved).
   pact bond list [--author <id>] [--counterparty <id>] [--bond-id <id>]
   pact bond verify <bondId>
 
@@ -49,6 +52,7 @@ async function main(): Promise<void> {
       relay: { type: 'string', multiple: true },
       state: { type: 'string' },
       kind: { type: 'string' },
+      from: { type: 'string' },
       'no-history': { type: 'boolean' },
       author: { type: 'string' },
       counterparty: { type: 'string' },
@@ -92,8 +96,8 @@ async function main(): Promise<void> {
 
       if (sub === 'form') {
         const [counterparty, bondId] = rest;
-        if (!counterparty || !bondId) {
-          console.error('usage: pact bond form <counterparty> <bondId> [--state] [--kind] [--no-history]');
+        if (!counterparty) {
+          console.error('usage: pact bond form <counterparty> [bondId] [--state] [--kind] [--no-history]');
           process.exitCode = 2;
           return;
         }
@@ -108,6 +112,26 @@ async function main(): Promise<void> {
         out(
           json,
           `Bond '${result.bondId}' published as '${result.state}' (state event ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s)).`,
+          result,
+        );
+        return;
+      }
+
+      if (sub === 'accept') {
+        const [bondId] = rest;
+        if (!bondId) {
+          console.error('usage: pact bond accept <bondId> [--from <counterparty>] [--state active]');
+          process.exitCode = 2;
+          return;
+        }
+        const result = await pact.acceptBond(bondId, {
+          counterparty: values.from as string | undefined,
+          state: values.state as BondState | undefined,
+        });
+        const reached = result.stateEvent.relays.filter((r) => r.accepted).length;
+        out(
+          json,
+          `Accepted bond '${result.bondId}' as '${result.state}' (→ ${reached} relay(s)).`,
           result,
         );
         return;
@@ -146,7 +170,7 @@ async function main(): Promise<void> {
         return;
       }
 
-      console.error("unknown 'bond' subcommand — try: form | list | verify");
+      console.error("unknown 'bond' subcommand — try: form | accept | list | verify");
       process.exitCode = 2;
       return;
     }
