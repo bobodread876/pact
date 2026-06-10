@@ -41,8 +41,21 @@ export function renderUI(
   .row { display:flex; gap:8px; margin-top:10px; }
   .pill { display:inline-block; font-size:11px; padding:2px 8px; border:1px solid #2a2a36; border-radius:999px; color:#9a9aa3; margin:2px 4px 2px 0; }
   a { color:#8a5cf6; }
-  .bond { padding:8px 0; border-bottom:1px solid #1d1d26; font-size:13px; }
+  .bond { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 0; border-bottom:1px solid #1d1d26; font-size:13px; flex-wrap:wrap; }
   .bond:last-child { border-bottom:0; }
+  .bond .who { font-family:ui-monospace,Menlo,monospace; }
+  .bond .meta { color:#9a9aa3; font-size:12px; }
+  .bond .actions { display:flex; gap:6px; }
+  .bond .actions button { padding:6px 10px; font-size:12px; }
+  .mutual { color:#5ad17f; font-weight:600; }
+  .lock { font-size:12px; }
+  .seg { display:flex; border:1px solid #2a2a36; border-radius:9px; overflow:hidden; margin-top:10px; }
+  .seg button { flex:1; background:#0b0b0f; color:#9a9aa3; border-radius:0; font-weight:500; }
+  .seg button.on { background:#23232e; color:#e7e7ea; font-weight:600; }
+  .hint { font-size:12px; color:#6b6b76; margin:6px 0 0; }
+  select { background:#0b0b0f; border:1px solid #2a2a36; border-radius:9px; padding:10px; color:#e7e7ea; font-size:13px; width:100%; }
+  .addr { display:flex; gap:8px; align-items:center; }
+  .addr code { flex:1; font-size:13px; word-break:break-all; background:#0b0b0f; border:1px solid #2a2a36; border-radius:9px; padding:10px; }
 </style>
 </head>
 <body>
@@ -53,9 +66,11 @@ export function renderUI(
   </header>
 
   <div class="card" id="unlock-card" style="display:none"><h2>Locked</h2><div id="unlock"></div></div>
-  <div class="card" id="identity-card"><h2>Identity</h2><div id="identity">Loading…</div></div>
-  <div class="card" id="wallet-card"><h2>Lightning wallet</h2><div id="wallet">Loading…</div></div>
+  <div class="card" id="identity-card"><h2>Your bond address</h2><div id="identity">Loading…</div></div>
+  <div class="card" id="inbox-card" style="display:none"><h2>Needs your response</h2><div id="inbox"></div></div>
   <div class="card" id="bonds-card"><h2>Bonds</h2><div id="bonds">Loading…</div></div>
+  <div class="card" id="form-card"><h2>Form a bond</h2><div id="formbond">Loading…</div></div>
+  <div class="card" id="wallet-card"><h2>Lightning wallet</h2><div id="wallet">Loading…</div></div>
   <div class="card" id="relays-card"><h2>Relays</h2><div id="relays">Loading…</div></div>
   <div class="card" id="agent-card" style="display:none"><h2>Connect an agent</h2><div id="agent"></div></div>
 
@@ -81,9 +96,46 @@ async function api(method, path, body) {
 const el = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-const DATA_CARDS = ['identity-card', 'wallet-card', 'bonds-card', 'relays-card'];
+// --- npub display (bech32 encode, NIP-19) — humans never see hex -------------
+const B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+function bechPolymod(values) {
+  const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+  let chk = 1;
+  for (const v of values) {
+    const b = chk >> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ v;
+    for (let i = 0; i < 5; i++) if ((b >> i) & 1) chk ^= GEN[i];
+  }
+  return chk;
+}
+function npubFromHex(hex) {
+  if (!/^[0-9a-f]{64}$/i.test(hex || '')) return hex || '?';
+  const bytes = hex.match(/../g).map(h => parseInt(h, 16));
+  const words = [];
+  let acc = 0, bits = 0;
+  for (const b of bytes) {
+    acc = (acc << 8) | b; bits += 8;
+    while (bits >= 5) { bits -= 5; words.push((acc >> bits) & 31); }
+  }
+  if (bits) words.push((acc << (5 - bits)) & 31);
+  const hrp = 'npub';
+  const exp = [...hrp].map(c => c.charCodeAt(0) >> 5).concat([0], [...hrp].map(c => c.charCodeAt(0) & 31));
+  const poly = bechPolymod(exp.concat(words, [0, 0, 0, 0, 0, 0])) ^ 1;
+  const checksum = [];
+  for (let i = 0; i < 6; i++) checksum.push((poly >> (5 * (5 - i))) & 31);
+  return hrp + '1' + words.concat(checksum).map(w => B32[w]).join('');
+}
+const shortAddr = (hex) => { const n = npubFromHex(hex); return n.length > 21 ? n.slice(0, 13) + '\\u2026' + n.slice(-4) : n; };
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const old = btn.textContent; btn.textContent = 'Copied \\u2713';
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  });
+}
+
+const DATA_CARDS = ['identity-card', 'bonds-card', 'form-card', 'wallet-card', 'relays-card'];
 function showUnlock(msg) {
-  DATA_CARDS.concat('agent-card').forEach(c => { el(c).style.display = 'none'; });
+  DATA_CARDS.concat('agent-card', 'inbox-card').forEach(c => { el(c).style.display = 'none'; });
   el('unlock-card').style.display = '';
   el('unlock').innerHTML =
     '<p class="muted">' + (msg || 'This node runs in public mode — its access token is never shown on this page. Enter it (it lives in your node config) to manage the node:') + '</p>' +
@@ -96,6 +148,171 @@ function showUnlock(msg) {
     TOKEN = t;
     el('unlock-card').style.display = 'none';
     refresh();
+  };
+}
+
+// --- The bond flow (docs/BOND-FLOW.md) ---------------------------------------
+// Situations are computed from the pair of sides per bond id; humans see the
+// wording-table vocabulary, never protocol states or bond ids.
+
+const ENDED_THEIRS = { revoked: 'Ended by them', rejected: 'Declined by them', withdrawn: 'Withdrawn by them', expired: 'Expired' };
+const ENDED_MINE = { revoked: 'Ended', rejected: 'Declined', withdrawn: 'Withdrawn', expired: 'Expired' };
+
+function situation(mine, theirs) {
+  const m = mine && mine.state, t = theirs && theirs.state;
+  if (t && ENDED_THEIRS[t]) return { label: ENDED_THEIRS[t], cls: 'muted', actions: [] };
+  if (m && ENDED_MINE[m]) return { label: ENDED_MINE[m], cls: 'muted', actions: [] };
+  if (m === 'paused' || t === 'paused') return { label: 'Paused', cls: 'warn', actions: m === 'paused' ? ['resume', 'end'] : ['end'] };
+  const live = (s) => s === 'accepted' || s === 'active';
+  if (live(m) && live(t)) return { label: '\\u25CF Mutual', cls: 'mutual', actions: ['pause', 'end'] };
+  if (!m && t === 'proposed') return { label: 'They want to bond', cls: 'warn', actions: ['accept', 'decline'], inbox: true };
+  if (m === 'proposed' && !t) return { label: 'Waiting for them', cls: 'muted', actions: ['withdraw'] };
+  if (m === 'proposed' && live(t)) return { label: 'They accepted \\u2014 confirming\\u2026', cls: 'muted', actions: ['confirm', 'end'] };
+  if (live(m) && (!t || t === 'proposed')) return { label: 'Waiting for them', cls: 'muted', actions: ['end'] };
+  return { label: 'Unknown', cls: 'muted', actions: [] };
+}
+
+async function bondAction(action, g, myHex) {
+  const counterparty = (g.mine && g.mine.counterparty) || (g.theirs && g.theirs.author);
+  const priv = g.visibility === 'private';
+  const post = (state) => api('POST', '/bonds', { counterparty, bondId: g.id, state, kind: g.kind || undefined, private: priv, history: !priv });
+  if (action === 'accept') return api('POST', '/bonds/accept', { bondId: g.id });
+  if (action === 'decline') return api('POST', '/bonds/accept', { bondId: g.id, state: 'rejected' });
+  if (action === 'confirm' || action === 'resume') return post('active');
+  if (action === 'pause') return post('paused');
+  if (action === 'withdraw') {
+    if (!confirm('Withdraw this proposal?')) return null;
+    return post('withdrawn');
+  }
+  if (action === 'end') {
+    if (!confirm('End this bond? They keep their own record of it; yours is marked ended.')) return null;
+    return post('revoked');
+  }
+  return null;
+}
+
+const ACTION_LABELS = { accept: 'Accept', decline: 'Decline', confirm: 'Confirm', resume: 'Resume', pause: 'Pause', withdraw: 'Withdraw', end: 'End bond' };
+const PRIMARY_ACTIONS = { accept: 1, confirm: 1, resume: 1 };
+
+function bondRow(g, sit, myHex) {
+  const who = (g.mine && g.mine.counterparty) || (g.theirs && g.theirs.author) || '';
+  const lock = g.visibility === 'private' ? ' <span class="lock" title="Private \\u2014 only the two of you can see this bond exists">\\uD83D\\uDD12</span>' : '';
+  const bad = [g.mine, g.theirs].some(s => s && !s.signature_valid) ? ' <span class="warn" title="A side of this bond failed verification">\\u26A0</span>' : '';
+  const kind = g.kind ? ' \\u00B7 ' + esc(g.kind) : '';
+  const buttons = sit.actions.map(a =>
+    '<button class="' + (PRIMARY_ACTIONS[a] ? '' : 'secondary') + '" data-act="' + a + '" data-bond="' + esc(g.id) + '">' + ACTION_LABELS[a] + '</button>').join('');
+  return '<div class="bond"><div>' +
+    '<span class="who" title="' + esc(npubFromHex(who)) + '">' + esc(shortAddr(who)) + '</span>' + lock + bad +
+    '<div class="meta"><span class="' + sit.cls + '">' + sit.label + '</span>' + kind + '</div></div>' +
+    '<div class="actions">' + buttons + '</div></div>';
+}
+
+let GROUPS = {};
+let CURRENT_ID = null;
+async function renderBonds(myHex, myNpub) {
+  if (!myHex) {
+    el('inbox-card').style.display = 'none';
+    el('bonds').innerHTML = '<p class="muted">Create an identity first.</p>';
+    renderForm(myHex, myNpub);
+    return;
+  }
+  // Two views, merged: bonds I authored (+ my private inbox), bonds toward me.
+  const [own, toward] = await Promise.all([
+    api('GET', '/bonds'),
+    api('GET', '/bonds?counterparty=' + encodeURIComponent(myNpub)),
+  ]);
+  const rows = {};
+  for (const r of ((own && own.bonds) || []).concat((toward && toward.bonds) || [])) {
+    if (r && r.id && r.bond) rows[r.id + ':' + r.visibility] = r;
+  }
+  GROUPS = {};
+  for (const key of Object.keys(rows)) {
+    const r = rows[key];
+    const g = GROUPS[r.bond] || (GROUPS[r.bond] = { id: r.bond, mine: null, theirs: null, visibility: 'public', kind: null });
+    const side = r.author === myHex ? 'mine' : 'theirs';
+    if (!g[side] || r.created_at > g[side].created_at) g[side] = r;
+    if (r.visibility === 'private') g.visibility = 'private';
+    if (r.kind && !g.kind) g.kind = r.kind;
+  }
+
+  const groups = Object.values(GROUPS);
+  const inbox = [], list = [];
+  for (const g of groups) {
+    const sit = situation(g.mine, g.theirs);
+    (sit.inbox ? inbox : list).push(bondRow(g, sit, myHex));
+  }
+  el('inbox-card').style.display = inbox.length ? '' : 'none';
+  el('inbox').innerHTML = inbox.join('');
+  el('bonds').innerHTML = list.length
+    ? list.join('')
+    : '<p class="muted">No bonds yet. Share your bond address, or paste someone\\'s below to propose one.</p>';
+
+  for (const btn of document.querySelectorAll('button[data-act]')) {
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = '\\u2026';
+      const g = GROUPS[btn.getAttribute('data-bond')];
+      const res = g && await bondAction(btn.getAttribute('data-act'), g, myHex);
+      if (res && res.error) alert(res.error);
+      refresh();
+    };
+  }
+  renderForm(myHex, myNpub);
+}
+
+let FORM_VIS = 'private';
+function renderForm(myHex, myNpub) {
+  if (!myHex) { el('formbond').innerHTML = '<p class="muted">Create an identity first.</p>'; return; }
+  if (el('propose-btn')) return; // keep form state across refreshes
+  el('formbond').innerHTML =
+    '<p class="muted">Paste the other side\\'s bond address (they copy it from their own Pact page):</p>' +
+    '<input id="cp-addr" placeholder="npub1\\u2026" autocomplete="off" />' +
+    '<div class="seg"><button id="vis-private" class="on">Private</button><button id="vis-public">Public</button></div>' +
+    '<p class="hint" id="vis-hint">Only the two of you can see this bond exists.</p>' +
+    '<div style="margin-top:10px"><select id="cp-kind">' +
+      '<option value="companion">companion</option><option value="collaboration">collaboration</option>' +
+      '<option value="team">team</option><option value="guardian">guardian</option>' +
+    '</select></div>' +
+    '<div class="row"><button id="propose-btn">Propose bond</button></div>' +
+    '<div class="badge muted" id="form-msg" style="margin-top:8px"></div>';
+  const setVis = (v) => {
+    FORM_VIS = v;
+    el('vis-private').className = v === 'private' ? 'on' : '';
+    el('vis-public').className = v === 'public' ? 'on' : '';
+    el('vis-hint').textContent = v === 'private'
+      ? 'Only the two of you can see this bond exists.'
+      : 'Anyone can look this bond up \\u2014 useful when the relationship itself is a credential.';
+  };
+  el('vis-private').onclick = () => setVis('private');
+  el('vis-public').onclick = () => setVis('public');
+  el('propose-btn').onclick = async () => {
+    const addr = el('cp-addr').value.trim();
+    const msg = el('form-msg');
+    if (!/^(npub1[02-9ac-hj-np-z]{58}|[0-9a-fA-F]{64}|did:nostr:npub1[02-9ac-hj-np-z]{58})$/.test(addr)) {
+      msg.textContent = 'That doesn\\'t look like a bond address (npub\\u2026).'; return;
+    }
+    if (addr === myNpub || addr.toLowerCase() === myHex || addr === 'did:nostr:' + myNpub) {
+      msg.textContent = 'That\\'s this node\\'s own address.'; return;
+    }
+    msg.textContent = 'Publishing\\u2026';
+    el('propose-btn').disabled = true;
+    const res = await api('POST', '/bonds', {
+      counterparty: addr,
+      kind: el('cp-kind').value,
+      private: FORM_VIS === 'private',
+      history: FORM_VIS !== 'private',
+    });
+    el('propose-btn').disabled = false;
+    const accepted = res && res.stateEvent && res.stateEvent.relays
+      ? res.stateEvent.relays.filter(r => r.accepted).length : 0;
+    if (res && res.bondId && accepted > 0) {
+      msg.textContent = 'Proposal sent \\u2014 waiting for them to accept.';
+      el('cp-addr').value = '';
+      refresh();
+    } else if (res && res.bondId) {
+      msg.textContent = 'Couldn\\'t reach any relay \\u2014 check the Relays card.';
+    } else {
+      msg.textContent = (res && res.error) || 'Failed to propose.';
+    }
   };
 }
 
@@ -112,10 +329,13 @@ async function refresh() {
     return;
   }
   DATA_CARDS.forEach(c => { el(c).style.display = ''; });
+  const myHex = (id && id.pubkeyHex) || '';
+  CURRENT_ID = id && id.did ? { hex: myHex, npub: id.npub } : null;
   if (id && id.did) {
     el('identity').innerHTML =
-      '<div class="kv"><span class="k">did</span><span class="v">' + esc(id.did) + '</span></div>' +
-      '<div class="kv"><span class="k">npub</span><span class="v">' + esc(id.npub) + '</span></div>';
+      '<p class="muted">Share this with anyone you want to bond with — like a Lightning address, it\\'s public and reusable.</p>' +
+      '<div class="addr"><code>' + esc(id.npub) + '</code><button id="copy-addr">Copy</button></div>';
+    el('copy-addr').onclick = (e) => copyText(id.npub, e.target);
   } else {
     el('identity').innerHTML = '<p class="muted">No identity yet — this Pact node needs a key to form bonds.</p>' +
       '<button id="keygen">Create identity</button>';
@@ -147,12 +367,7 @@ async function refresh() {
     };
   }
 
-  const b = await api('GET', '/bonds');
-  const bonds = (b && b.bonds) || [];
-  el('bonds').innerHTML = bonds.length
-    ? bonds.map(x => '<div class="bond"><span class="' + (x.signature_valid?'ok':'warn') + '">●</span> ' +
-        esc(x.state||'?') + ' · ' + esc(x.bond||'') + '</div>').join('')
-    : '<p class="muted">No bonds yet. Form one with the <code>pact_form_bond</code> tool or <code>POST /bonds</code>.</p>';
+  await renderBonds(myHex, id && id.npub);
 
   const rl = await api('GET', '/relays');
   const relays = (rl && rl.relays) || [];
@@ -208,6 +423,9 @@ if (PUBLIC_MODE) {
   }
 }
 refresh();
+// Keep the inbox live without clobbering in-progress edits elsewhere on the
+// page: poll only the bond views.
+setInterval(() => { if (CURRENT_ID && (!PUBLIC_MODE || TOKEN)) renderBonds(CURRENT_ID.hex, CURRENT_ID.npub); }, 20000);
 </script>
 </body>
 </html>`;

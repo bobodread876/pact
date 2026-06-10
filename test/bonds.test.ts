@@ -100,6 +100,7 @@ describe('private bonds', () => {
     expect(proposal?.author).toBe(aliceHex);
     expect(proposal?.counterparty).toBe(bobHex);
     expect(proposal?.state).toBe('proposed');
+    expect(proposal?.kind).toBe('companion');
     expect(proposal?.visibility).toBe('private');
     // signature_valid = unwrap chain + embedded BIP-340 proof + subject match.
     expect(proposal?.signature_valid).toBe(true);
