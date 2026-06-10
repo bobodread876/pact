@@ -6,6 +6,7 @@
 // produces, so daemons and SDKs can treat both transports uniformly.
 
 import {
+  KIND_BOND_STATE,
   KIND_GIFT_WRAP,
   keypairFromSecret,
   pubkeyHexFromIdentity,
@@ -87,6 +88,9 @@ export async function listPrivateBonds(
 
   const latest = new Map<string, BondView>();
   for (const rumor of selectBondRumors(events, secret)) {
+    // State views come from kind:30317 rumors only; kind:1317 lifecycle rumors
+    // (reaffirmations etc.) are resolved separately by listReaffirmations.
+    if (rumor.rumor.kind !== KIND_BOND_STATE) continue;
     if (filter.bondId && rumor.bond !== filter.bondId) continue;
     if (authorHex && rumor.author !== authorHex) continue;
     if (counterpartyHex && rumor.counterparty !== counterpartyHex) continue;

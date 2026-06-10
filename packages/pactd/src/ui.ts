@@ -180,7 +180,7 @@ function situation(mine, theirs) {
   if (m && ENDED_MINE[m]) return { label: ENDED_MINE[m], cls: 'muted', actions: [] };
   if (m === 'paused' || t === 'paused') return { label: 'Paused', cls: 'warn', actions: m === 'paused' ? ['resume', 'end'] : ['end'] };
   const live = (s) => s === 'accepted' || s === 'active';
-  if (live(m) && live(t)) return { label: '\\u25CF Mutual', cls: 'mutual', actions: ['pause', 'end'] };
+  if (live(m) && live(t)) return { label: '\\u25CF Mutual', cls: 'mutual', actions: ['reaffirm', 'pause', 'end'] };
   if (!m && t === 'proposed') return { label: 'They want to bond', cls: 'warn', actions: ['accept', 'decline'], inbox: true };
   if (m === 'proposed' && !t) return { label: 'Waiting for them', cls: 'muted', actions: ['withdraw'] };
   if (m === 'proposed' && live(t)) return { label: 'They accepted \\u2014 confirming\\u2026', cls: 'muted', actions: ['confirm', 'end'] };
@@ -192,6 +192,7 @@ async function bondAction(action, g, myHex) {
   const counterparty = (g.mine && g.mine.counterparty) || (g.theirs && g.theirs.author);
   const priv = g.visibility === 'private';
   const post = (state) => api('POST', '/bonds', { counterparty, bondId: g.id, state, kind: g.kind || undefined, private: priv, history: !priv });
+  if (action === 'reaffirm') return api('POST', '/bonds/reaffirm', { bondId: g.id });
   if (action === 'accept') return api('POST', '/bonds/accept', { bondId: g.id });
   if (action === 'decline') return api('POST', '/bonds/accept', { bondId: g.id, state: 'rejected' });
   if (action === 'confirm' || action === 'resume') return post('active');
@@ -207,8 +208,17 @@ async function bondAction(action, g, myHex) {
   return null;
 }
 
-const ACTION_LABELS = { accept: 'Accept', decline: 'Decline', confirm: 'Confirm', resume: 'Resume', pause: 'Pause', withdraw: 'Withdraw', end: 'End bond' };
-const PRIMARY_ACTIONS = { accept: 1, confirm: 1, resume: 1 };
+const ACTION_LABELS = { reaffirm: 'Reaffirm', accept: 'Accept', decline: 'Decline', confirm: 'Confirm', resume: 'Resume', pause: 'Pause', withdraw: 'Withdraw', end: 'End bond' };
+const PRIMARY_ACTIONS = { accept: 1, confirm: 1, resume: 1, reaffirm: 1 };
+const ACTION_TITLES = { reaffirm: 'Choose this bond again \\u2014 reaffirmations build its history: proof the relationship lasted, not just started.' };
+
+function ago(unixSeconds) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  if (s < 90) return 'just now';
+  if (s < 5400) return Math.round(s / 60) + 'm ago';
+  if (s < 129600) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
 
 function bondRow(g, sit, myHex) {
   const who = (g.mine && g.mine.counterparty) || (g.theirs && g.theirs.author) || '';
@@ -216,10 +226,17 @@ function bondRow(g, sit, myHex) {
   const bad = [g.mine, g.theirs].some(s => s && !s.signature_valid) ? ' <span class="warn" title="A side of this bond failed verification">\\u26A0</span>' : '';
   const kind = g.kind ? ' \\u00B7 ' + esc(g.kind) : '';
   const buttons = sit.actions.map(a =>
-    '<button class="' + (PRIMARY_ACTIONS[a] ? '' : 'secondary') + '" data-act="' + a + '" data-bond="' + esc(g.id) + '">' + ACTION_LABELS[a] + '</button>').join('');
+    '<button class="' + (PRIMARY_ACTIONS[a] ? '' : 'secondary') + '"' + (ACTION_TITLES[a] ? ' title="' + ACTION_TITLES[a] + '"' : '') + ' data-act="' + a + '" data-bond="' + esc(g.id) + '">' + ACTION_LABELS[a] + '</button>').join('');
+  let chosen = '';
+  if (g.reaffirm && (g.reaffirm.mine || g.reaffirm.theirs)) {
+    const part = [];
+    if (g.reaffirm.mine) part.push('you ' + ago(g.reaffirm.mine));
+    if (g.reaffirm.theirs) part.push('them ' + ago(g.reaffirm.theirs));
+    chosen = ' \\u00B7 reaffirmed: ' + part.join(' \\u00B7 ');
+  }
   return '<div class="bond"><div>' +
     '<span class="who" title="' + esc(npubFromHex(who)) + '">' + esc(shortAddr(who)) + '</span>' + lock + bad +
-    '<div class="meta"><span class="' + sit.cls + '">' + sit.label + '</span>' + kind + '</div></div>' +
+    '<div class="meta"><span class="' + sit.cls + '">' + sit.label + '</span>' + kind + chosen + '</div></div>' +
     '<div class="actions">' + buttons + '</div></div>';
 }
 
@@ -233,9 +250,10 @@ async function renderBonds(myHex, myNpub) {
     return;
   }
   // Two views, merged: bonds I authored (+ my private inbox), bonds toward me.
-  const [own, toward] = await Promise.all([
+  const [own, toward, reaff] = await Promise.all([
     api('GET', '/bonds'),
     api('GET', '/bonds?counterparty=' + encodeURIComponent(myNpub)),
+    api('GET', '/reaffirmations'),
   ]);
   const rows = {};
   for (const r of ((own && own.bonds) || []).concat((toward && toward.bonds) || [])) {
@@ -251,6 +269,13 @@ async function renderBonds(myHex, myNpub) {
     if (r.kind && !g.kind) g.kind = r.kind;
   }
 
+  for (const r of ((reaff && reaff.reaffirmations) || [])) {
+    const g = GROUPS[r.bondId];
+    if (!g) continue;
+    g.reaffirm = g.reaffirm || {};
+    const side = r.author === myHex ? 'mine' : 'theirs';
+    if (!g.reaffirm[side] || r.at > g.reaffirm[side]) g.reaffirm[side] = r.at;
+  }
   const groups = Object.values(GROUPS);
   const inbox = [], list = [];
   for (const g of groups) {

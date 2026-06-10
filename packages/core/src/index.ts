@@ -8,6 +8,14 @@ export * from '@mate-protocol/core';
 export { kindFromContent, makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
 export * from './keystore.js';
 export { listPrivateBonds, type PrivateBondFilter } from './private.js';
+export {
+  REAFFIRM_TYPE,
+  reaffirmBond,
+  listReaffirmations,
+  type ReaffirmBondInput,
+  type ReaffirmBondResult,
+  type ReaffirmationView,
+} from './reaffirm.js';
 
 import {
   BOND_TAG,

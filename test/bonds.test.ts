@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   acceptBond,
   formBond,
+  listReaffirmations,
+  reaffirmBond,
   generateNostrKeypair,
   keypairFromSecret,
   listBonds,
@@ -152,6 +154,52 @@ describe('private bonds', () => {
     const fromAlice = bonds.filter((b) => b.author === aliceHex);
     expect(fromAlice).toHaveLength(1);
     expect(fromAlice[0].state).toBe('active');
+  });
+});
+
+describe('reaffirmation', () => {
+  it('private bond: both sides reaffirm privately, no public trace', async () => {
+    const bondId = newBondId();
+    await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', visibility: 'private', relays });
+    await acceptBond(bob, { bondId, relays });
+
+    const before = relay.events.filter((e) => e.kind === 1317).length;
+    const r1 = await reaffirmBond(alice, { bondId, counterparty: bobNpub, visibility: 'private', relays });
+    expect(r1.visibility).toBe('private');
+    const aliceNpub = keypairFromSecret(alice).npub;
+    await reaffirmBond(bob, { bondId, counterparty: aliceNpub, visibility: 'private', relays });
+
+    // No public kind:1317 events appeared — reaffirmations rode the gift wrap.
+    expect(relay.events.filter((e) => e.kind === 1317).length).toBe(before);
+
+    // Each party sees both reaffirmations, latest-per-author.
+    for (const secret of [alice, bob]) {
+      const { reaffirmations } = await listReaffirmations(secret, relays);
+      const forBond = reaffirmations.filter((r) => r.bondId === bondId);
+      expect(forBond).toHaveLength(2);
+      expect(new Set(forBond.map((r) => r.author))).toEqual(new Set([aliceHex, bobHex]));
+      expect(forBond.every((r) => r.visibility === 'private')).toBe(true);
+    }
+
+    // An outsider sees none of it.
+    const { reaffirmations: outsider } = await listReaffirmations(mallory, relays);
+    expect(outsider.filter((r) => r.bondId === bondId)).toHaveLength(0);
+  });
+
+  it('public bond: reaffirmation is a queryable typed history event', async () => {
+    const bondId = newBondId();
+    await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', relays });
+    await acceptBond(bob, { bondId, relays });
+
+    const result = await reaffirmBond(alice, { bondId, counterparty: bobNpub, relays });
+    expect(result.visibility).toBe('public');
+    expect(result.event.relays[0].accepted).toBe(true);
+
+    const { reaffirmations } = await listReaffirmations(alice, relays);
+    const mine = reaffirmations.find((r) => r.bondId === bondId && r.author === aliceHex);
+    expect(mine).toBeDefined();
+    expect(mine?.visibility).toBe('public');
+    expect(mine?.count).toBe(1);
   });
 });
 
