@@ -40,7 +40,7 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.8.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.9.0' });
 
   server.tool(
     'pact_keygen',
@@ -92,6 +92,17 @@ export function createServer(): McpServer {
           ...(priv === undefined ? {} : { visibility: priv ? 'private' : 'public' }),
         }),
       ),
+  );
+
+  server.tool(
+    'pact_reaffirm_bond',
+    "Reaffirm a bond: publish a bond.reaffirmed lifecycle event marking that this agent still chooses the bond. Reaffirmations accumulate into the bond's longevity record — proof the relationship lasted, not just started. Follows the bond's channel (private bonds reaffirm privately).",
+    {
+      bond_id: z.string().describe('The bond id to reaffirm.'),
+      counterparty: z.string().optional().describe('Counterparty identity. Omit to auto-resolve from this node\'s own bond.'),
+    },
+    async ({ bond_id, counterparty }) =>
+      text(await daemon('POST', '/bonds/reaffirm', { bondId: bond_id, counterparty })),
   );
 
   server.tool(

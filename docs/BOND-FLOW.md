@@ -123,7 +123,7 @@ core client-side logic and MUST be consistent across surfaces:
 |---|---|---|---|
 | **Incoming proposal** | theirs=`proposed`, mine=absent | "They want to bond" | Accept, Decline |
 | **Outgoing proposal** | mine=`proposed`, theirs=absent | "Waiting for them" | Withdraw |
-| **Mutual** | both sides `accepted`/`active` | "● Mutual" (+kind) | End, (Pause) |
+| **Mutual** | both sides `accepted`/`active` | "● Mutual" (+kind, + reaffirmed-by meta) | **Reaffirm**, Pause, End |
 | **One-sided active** | mine=`active`/`accepted`, theirs=`proposed` | "Waiting for them" | End |
 | **They ended it** | theirs=`revoked`/`rejected` | "Ended by them" | Archive/dismiss |
 | **I ended it** | mine=`revoked`/`withdrawn`/`rejected` | "Ended" | Archive/dismiss |
@@ -154,6 +154,8 @@ reference; translate freely, keep register):
 | accept action | "Accept" |
 | reject action | "Decline" |
 | revoke action | "End bond" |
+| `bond.reaffirmed` (action) | "**Reaffirm**" — tooltip: "Choose this bond again — reaffirmations build its history: proof the relationship lasted, not just started." |
+| reaffirmation meta | "reaffirmed: you 2d ago · them 5d ago" (relative times, both sides shown) |
 | withdraw action | "Withdraw" |
 
 Never show: bond ids (except inside "details"), event ids, kind numbers,
@@ -173,7 +175,9 @@ integration surface:
 | Accept | `POST /bonds/accept` `{ bondId }` (echoes the channel automatically) |
 | Decline | `POST /bonds/accept` `{ bondId, state: "rejected" }` |
 | Withdraw / End / Pause / Resume | `POST /bonds` `{ counterparty, bondId, state: "withdrawn"\|"revoked"\|"paused"\|"active", private: <same as the bond> }` |
-| Live updates | poll the two GETs, or `GET /events` (SSE) |
+| Reaffirm | `POST /bonds/reaffirm` `{ bondId }` (counterparty + channel auto-resolved from this node's own side) |
+| Reaffirmation meta | `GET /reaffirmations` → latest-per-(bond, author); one call covers the whole list |
+| Live updates | poll the GETs, or `GET /events` (SSE) |
 
 Notes:
 
@@ -209,7 +213,19 @@ quiet "delivered to n/m relays" detail, never a scary warning.
   marker only with NIP-39 proof).
 - **Paid affordances**: the verify-disclosure market (402 flow) and
   staking, as separate cards — they extend the bond row, not the flow.
-- **Reaffirmation**: a "still us" tap on mutual bonds publishing
-  `bond.reaffirmed` history — the heartbeat that makes longevity legible.
-
 The three moves do not change as these arrive.
+
+## 8. Reaffirmation (shipped in v1.1 of this flow)
+
+Mutual bonds carry a **Reaffirm** action — the deliberate act of choosing the
+bond again. It publishes a `bond.reaffirmed` lifecycle event on the bond's
+channel (gift-wrapped for private bonds) and the row's meta shows both sides'
+latest: `reaffirmed: you 2d ago · them 5d ago`.
+
+Reaffirmation is per-side; surfaces MUST show both timestamps, because "both
+parties kept choosing this, over time" is the protocol's core longevity
+signal — a bond reaffirmed by both across months is evidence the relationship
+lasted, not just started. The button label is "Reaffirm"; the surrounding
+copy carries the *choose again* voice (see wording table). Surfaces SHOULD
+debounce repeat taps (it is not a like button) but the protocol does not
+rate-limit.

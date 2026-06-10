@@ -1,6 +1,6 @@
 {
   "name": "pact-mcp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Pact MCP server — give any MCP-capable agent the tools to form, manage, and verify relationship bonds (thin client over a pactd daemon).",
   "license": "Apache-2.0",
   "type": "module",

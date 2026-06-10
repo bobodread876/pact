@@ -8,6 +8,8 @@ import {
   hasIdentity,
   listBonds,
   listPrivateBonds,
+  listReaffirmations,
+  reaffirmBond,
   loadIdentity,
   loadSecret,
   pubkeyHexFromIdentity,
@@ -23,7 +25,7 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.15.1';
+export const VERSION = '0.16.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
@@ -167,6 +169,39 @@ export function createDaemon() {
           visibility: acceptVisibility,
         });
         return json(res, 200, result);
+      }
+      if (path === '/bonds/reaffirm' && method === 'POST') {
+        if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
+        const body = await readJson(req);
+        if (typeof body.bondId !== 'string') return json(res, 400, { error: 'bondId (string) is required' });
+        // Resolve the bond's counterparty + channel from this node's own view
+        // unless given — reaffirmations always follow the bond's channel.
+        let counterparty = typeof body.counterparty === 'string' ? body.counterparty : undefined;
+        let visibility: BondVisibility | undefined =
+          body.visibility === 'private' || body.private === true ? 'private' : body.visibility === 'public' ? 'public' : undefined;
+        if (!counterparty || !visibility) {
+          const selfHex = loadIdentity().pubkeyHex;
+          const [pub, priv] = await Promise.all([
+            listBonds({ '#d': [body.bondId], authors: [selfHex] }, RELAYS),
+            listPrivateBonds(loadSecret(), RELAYS, { bondId: body.bondId, author: selfHex }),
+          ]);
+          const own = [...priv.bonds, ...pub.bonds][0];
+          if (!own) return json(res, 404, { error: `no bond ${body.bondId} authored by this node — form or accept it first` });
+          counterparty = counterparty ?? own.counterparty ?? undefined;
+          visibility = visibility ?? own.visibility;
+        }
+        if (!counterparty) return json(res, 400, { error: 'could not resolve counterparty — pass it explicitly' });
+        const result = await reaffirmBond(loadSecret(), {
+          bondId: body.bondId,
+          counterparty,
+          visibility,
+          relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
+        });
+        return json(res, 200, result);
+      }
+      if (path === '/reaffirmations' && method === 'GET') {
+        if (!hasIdentity()) return json(res, 200, { relaysReached: [], reaffirmations: [] });
+        return json(res, 200, await listReaffirmations(loadSecret(), relaysFrom(url)));
       }
       if (path === '/bonds' && method === 'GET') {
         const filter: Pick<RelayFilter, 'authors' | '#d' | '#p'> = {};

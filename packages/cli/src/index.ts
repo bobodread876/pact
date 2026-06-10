@@ -22,6 +22,8 @@ Usage:
                                      channel echoes the proposal unless --private/--public override).
   pact bond list [--author <id>] [--counterparty <id>] [--bond-id <id>] [--visibility all|public|private]
   pact bond verify <bondId>          (private sides this key can decrypt are included)
+  pact bond reaffirm <bondId> [--from <counterparty>]
+                                     Choose the bond again: publish bond.reaffirmed on its channel.
 
 Identity (did:nostr / npub / hex) is resolved automatically.
 
@@ -164,6 +166,32 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (sub === 'reaffirm') {
+        const [bondId] = rest;
+        if (!bondId) {
+          console.error('usage: pact bond reaffirm <bondId> [--from <counterparty>]');
+          process.exitCode = 2;
+          return;
+        }
+        let counterparty = values.from as string | undefined;
+        let visibility;
+        if (!counterparty || !visibility) {
+          const { bonds } = await pact.listBonds({ bondId });
+          const own = bonds.find((b) => b.author === pact.identity.pubkeyHex);
+          if (!own && !counterparty) {
+            console.error(`no bond ${bondId} authored by this identity — pass --from <counterparty>`);
+            process.exitCode = 1;
+            return;
+          }
+          counterparty = counterparty ?? own?.counterparty ?? undefined;
+          visibility = own?.visibility;
+        }
+        const result = await pact.reaffirmBond(bondId, { counterparty: counterparty!, visibility });
+        const reached = result.event.relays.filter((r) => r.accepted).length;
+        out(json, `Reaffirmed '${result.bondId}'${result.visibility === 'private' ? ' (private)' : ''} — chosen again (→ ${reached} relay(s)).`, result);
+        return;
+      }
+
       if (sub === 'verify') {
         const [bondId] = rest;
         if (!bondId) {
@@ -181,7 +209,7 @@ async function main(): Promise<void> {
         return;
       }
 
-      console.error("unknown 'bond' subcommand — try: form | accept | list | verify");
+      console.error("unknown 'bond' subcommand — try: form | accept | list | verify | reaffirm");
       process.exitCode = 2;
       return;
     }
