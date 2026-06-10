@@ -1,6 +1,6 @@
 {
   "name": "pact-core",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Pact Core — the agent-relationship runtime engine (bonds over Nostr).",
   "license": "Apache-2.0",
   "type": "module",
@@ -19,6 +19,6 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@mate-protocol/core": "^0.5.0"
+    "@mate-protocol/core": "^0.6.0"
   }
 }

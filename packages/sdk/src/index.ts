@@ -12,6 +12,8 @@ import {
   keypairFromSecret,
   listBonds as coreListBonds,
   listPrivateBonds as coreListPrivateBonds,
+  listReaffirmations as coreListReaffirmations,
+  reaffirmBond as coreReaffirmBond,
   loadSecret,
   pubkeyHexFromIdentity,
   secretFromNsec,
@@ -20,10 +22,12 @@ import {
   type BondView,
   type BondVisibility,
   type FormBondResult,
+  type ReaffirmBondResult,
+  type ReaffirmationView,
   type VerifyBondResult,
 } from 'pact-core';
 
-export type { BondState, BondView, BondVisibility, FormBondResult, VerifyBondResult } from 'pact-core';
+export type { BondState, BondView, BondVisibility, FormBondResult, ReaffirmBondResult, ReaffirmationView, VerifyBondResult } from 'pact-core';
 
 export interface PactOptions {
   /** Relays to publish/resolve on. Defaults to the protocol's default relays. */
@@ -216,6 +220,27 @@ export class Pact {
       relays: opts.relays ?? this.relays,
       visibility: opts.visibility,
     });
+  }
+
+  /**
+   * Reaffirm a bond — publish `bond.reaffirmed`, the deliberate act of
+   * choosing the bond again. Follows the bond's channel.
+   */
+  reaffirmBond(
+    bondId: string,
+    opts: { counterparty: string; visibility?: BondVisibility; relays?: string[] },
+  ): Promise<ReaffirmBondResult> {
+    return coreReaffirmBond(this.secret, {
+      bondId,
+      counterparty: opts.counterparty,
+      visibility: opts.visibility,
+      relays: opts.relays ?? this.relays,
+    });
+  }
+
+  /** Reaffirmations visible to this identity, latest-per-(bond, author). */
+  listReaffirmations(relays?: string[]): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[] }> {
+    return coreListReaffirmations(this.secret, relays ?? this.relays);
   }
 
   /**
