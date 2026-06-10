@@ -17,10 +17,11 @@ Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only),
 | `GET /healthz` | — | liveness + version (unauthenticated) |
 | `GET /identity` | — | this agent's did:nostr / npub / pubkey (404 if none) |
 | `POST /identity` | `{ force? }` | create the local identity |
-| `POST /bonds` | `{ counterparty, bondId, state?, kind?, relays?, history? }` | assemble + sign + publish a bond |
-| `GET /bonds` | `?bond_id= &counterparty= &author= &relay=` | resolve + verify bonds (defaults to self) |
-| `GET /bonds/verify` | `?bond_id= &relay= &payment_hash=` | verify a bond + mutual check (returns **402 + invoice** if `PACT_VERIFY_PRICE_SATS` is set + wallet connected) |
-| `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes (the heartbeat/inbox) |
+| `POST /bonds` | `{ counterparty, bondId?, state?, kind?, relays?, history?, private? }` | assemble + sign + publish a bond. `private: true` → NIP-59 gift wrap: off the public graph, parties-only (see below) |
+| `POST /bonds/accept` | `{ bondId, counterparty?, state?, relays?, visibility? }` | accept a proposal by echoing its id; proposer auto-resolved from public events **or** the private inbox; the accept echoes the proposal's channel unless `visibility` overrides |
+| `GET /bonds` | `?bond_id= &counterparty= &author= &visibility= &relay=` | resolve + verify bonds across both transports (public events + this node's decryptable gift wraps); `visibility=public\|private\|all` (default `all`) |
+| `GET /bonds/verify` | `?bond_id= &relay= &payment_hash=` | verify a bond + mutual check, including private sides this node can decrypt (returns **402 + invoice** if `PACT_VERIFY_PRICE_SATS` is set + wallet connected) |
+| `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes, public + private (the heartbeat/inbox) |
 | `GET /wallet` | — | wallet connection status + balance (sats) |
 | `POST /wallet/invoice` | `{ amountSats, description? }` | create a Lightning invoice |
 | `GET /wallet/invoice` | `?payment_hash= \| ?invoice=` | look up an invoice (paid?) |
@@ -81,4 +82,16 @@ This first cut ships the **rail + primitives** (invoice / pay / lookup / balance
 
 Binds to loopback only. The key lives with the daemon (mode 600 under `~/.pact`), never in the agent process — process isolation. Point `?relay=` at your own relay for a fully sovereign setup.
 
-Not yet implemented: **direct lnflash provider** (lnflash has no NWC yet), remote signer (NIP-46), live relay subscriptions (the SSE stream currently polls), NIP-44 NWC encryption (uses NIP-04), bonding/escrow + agent-labor market endpoints.
+### Private bonds
+
+`POST /bonds` with `private: true` keeps the bond off the public graph entirely
+(MATE.md extension §13): the kind:30317 event stays an unsigned NIP-59 rumor,
+NIP-44-encrypted and gift-wrapped once for the counterparty and once for this
+node (copy-to-self). Relays see a one-time signer, the recipient `p` tag, and a
+fuzzed timestamp — no bond id, state, or counterparty linkage. The document
+carries an embedded BIP-340 proof, so either party can selectively disclose it
+and the disclosure verifies on its own. `GET /bonds/verify` for a private bond
+returns results only on a node holding one of the two keys — to everyone else
+the bond is invisible by design.
+
+Not yet implemented: **direct lnflash provider** (lnflash has no NWC yet), remote signer (NIP-46), live relay subscriptions (the SSE stream currently polls), NIP-44 NWC encryption (wallet channel uses NIP-04), bonding/escrow + agent-labor market endpoints.

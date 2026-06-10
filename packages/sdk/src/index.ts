@@ -11,17 +11,19 @@ import {
   hasIdentity,
   keypairFromSecret,
   listBonds as coreListBonds,
+  listPrivateBonds as coreListPrivateBonds,
   loadSecret,
   pubkeyHexFromIdentity,
   secretFromNsec,
   verifyBond as coreVerifyBond,
   type BondState,
   type BondView,
+  type BondVisibility,
   type FormBondResult,
   type VerifyBondResult,
 } from 'pact-core';
 
-export type { BondState, BondView, FormBondResult, VerifyBondResult } from 'pact-core';
+export type { BondState, BondView, BondVisibility, FormBondResult, VerifyBondResult } from 'pact-core';
 
 export interface PactOptions {
   /** Relays to publish/resolve on. Defaults to the protocol's default relays. */
@@ -42,9 +44,14 @@ export interface FormBondArgs {
   /** Defaults to 'proposed'. */
   state?: BondState;
   kind?: string;
-  /** Also publish a kind:1317 history event (default true). */
+  /** Also publish a kind:1317 history event (default true; public bonds only). */
   history?: boolean;
   relays?: string[];
+  /**
+   * 'private' keeps the bond off the public graph: NIP-59 gift wrap with an
+   * embedded BIP-340 document proof. Default 'public'.
+   */
+  visibility?: BondVisibility;
 }
 
 export interface ListBondsArgs {
@@ -54,6 +61,8 @@ export interface ListBondsArgs {
   counterparty?: string;
   bondId?: string;
   relays?: string[];
+  /** 'all' (default): public events + this key's decryptable gift wraps. */
+  visibility?: BondVisibility | 'all';
 }
 
 export interface BondQueryResult {
@@ -122,11 +131,18 @@ export class Pact {
       kind: args.kind,
       history: args.history ?? true,
       relays: args.relays ?? this.relays,
+      visibility: args.visibility,
     });
   }
 
-  /** Resolve bonds matching a filter (defaults to bonds this identity authored). */
-  listBonds(args: ListBondsArgs = {}): Promise<BondQueryResult> {
+  /**
+   * Resolve bonds matching a filter (defaults to bonds this identity authored,
+   * plus its decryptable private inbox).
+   */
+  async listBonds(args: ListBondsArgs = {}): Promise<BondQueryResult> {
+    const visibility = args.visibility ?? 'all';
+    const relays = args.relays ?? this.relays;
+
     const filter: { authors?: string[]; '#p'?: string[]; '#d'?: string[] } = {};
     if (args.author) filter.authors = [pubkeyHexFromIdentity(args.author)];
     if (args.counterparty) filter['#p'] = [pubkeyHexFromIdentity(args.counterparty)];
@@ -134,7 +150,24 @@ export class Pact {
     if (!args.author && !args.counterparty && !args.bondId) {
       filter.authors = [this.identity.pubkeyHex];
     }
-    return coreListBonds(filter, args.relays ?? this.relays);
+
+    const pub =
+      visibility === 'private'
+        ? { relaysReached: [] as string[], bonds: [] as BondView[] }
+        : await coreListBonds(filter, relays);
+    const priv =
+      visibility === 'public'
+        ? { relaysReached: [] as string[], bonds: [] as BondView[] }
+        : await coreListPrivateBonds(this.secret, relays, {
+            bondId: args.bondId,
+            author: args.author,
+            counterparty: args.counterparty,
+          });
+
+    return {
+      relaysReached: [...new Set([...pub.relaysReached, ...priv.relaysReached])],
+      bonds: [...pub.bonds, ...priv.bonds].sort((a, b) => b.created_at - a.created_at),
+    };
   }
 
   /** Bonds this identity has authored. */
@@ -147,19 +180,32 @@ export class Pact {
     return this.listBonds({ counterparty: this.identity.did, relays });
   }
 
-  /** Resolve and verify a bond by id (mutual = both sides signed & cross-reference). */
+  /**
+   * Resolve and verify a bond by id (mutual = both sides signed & cross-reference).
+   * Private sides this key can decrypt are included; to anyone else a private
+   * bond is invisible by design.
+   */
   verifyBond(bondId: string, relays?: string[]): Promise<VerifyBondResult> {
-    return coreVerifyBond(bondId, relays ?? this.relays);
+    return coreVerifyBond(bondId, relays ?? this.relays, { secret: this.secret });
   }
 
   /**
    * Accept a proposed bond by echoing the proposer's id (so both sides share one
    * `d` tag and resolve as mutual). The proposer (`counterparty`) is auto-resolved
-   * from the inbound proposal if not given. State defaults to `active`.
+   * from the inbound proposal (public or private) if not given. State defaults to
+   * `active`, and the accept is published on the proposal's channel unless
+   * `visibility` overrides it.
    */
   acceptBond(
     bondId: string,
-    opts: { counterparty?: string; state?: BondState; kind?: string; history?: boolean; relays?: string[] } = {},
+    opts: {
+      counterparty?: string;
+      state?: BondState;
+      kind?: string;
+      history?: boolean;
+      relays?: string[];
+      visibility?: BondVisibility;
+    } = {},
   ): Promise<FormBondResult> {
     return coreAcceptBond(this.secret, {
       bondId,
@@ -168,6 +214,7 @@ export class Pact {
       kind: opts.kind,
       history: opts.history,
       relays: opts.relays ?? this.relays,
+      visibility: opts.visibility,
     });
   }
 

@@ -1,18 +1,20 @@
 {
   "name": "pact-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Pact CLI — form, resolve, and verify agent bonds from the shell.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "pact": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc"
   },
   "dependencies": {
-    "pact-core": "^0.2.0",
-    "pact-sdk": "^0.2.0"
+    "pact-core": "^0.3.0",
+    "pact-sdk": "^0.3.0"
   }
 }
