@@ -7,10 +7,12 @@ import {
   formBond,
   hasIdentity,
   listBonds,
+  listPrivateBonds,
   loadIdentity,
   loadSecret,
   pubkeyHexFromIdentity,
   type BondState,
+  type BondVisibility,
   type RelayFilter,
 } from 'pact-core';
 
@@ -21,7 +23,7 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.13.0';
+export const VERSION = '0.14.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
@@ -125,6 +127,7 @@ export function createDaemon() {
         if (typeof body.counterparty !== 'string') {
           return json(res, 400, { error: 'counterparty (string) is required' });
         }
+        const visibility = body.private === true || body.visibility === 'private' ? 'private' : 'public';
         const result = await formBond(loadSecret(), {
           counterparty: body.counterparty,
           // Omit bondId to auto-generate urn:mate:<uuid> (the proposer's id).
@@ -132,7 +135,10 @@ export function createDaemon() {
           state: (typeof body.state === 'string' ? body.state : 'proposed') as BondState,
           kind: typeof body.kind === 'string' ? body.kind : undefined,
           relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
-          history: body.history === undefined ? true : Boolean(body.history),
+          // History events are public-transport only; private bonds carry their
+          // canonical timestamp in the rumor.
+          history: visibility === 'private' ? false : body.history === undefined ? true : Boolean(body.history),
+          visibility,
         });
         return json(res, 200, result);
       }
@@ -142,6 +148,14 @@ export function createDaemon() {
         if (typeof body.bondId !== 'string') {
           return json(res, 400, { error: 'bondId (string) is required — the proposer\'s bond id to echo' });
         }
+        // Omit visibility to echo the proposal's channel (private proposal →
+        // private accept). body.private/visibility overrides explicitly.
+        const acceptVisibility: BondVisibility | undefined =
+          body.private === true || body.visibility === 'private'
+            ? 'private'
+            : body.visibility === 'public'
+              ? 'public'
+              : undefined;
         const result = await acceptBond(loadSecret(), {
           bondId: body.bondId,
           // Omit counterparty to auto-resolve the proposer from the inbound proposal.
@@ -150,6 +164,7 @@ export function createDaemon() {
           kind: typeof body.kind === 'string' ? body.kind : undefined,
           relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
           history: body.history === undefined ? true : Boolean(body.history),
+          visibility: acceptVisibility,
         });
         return json(res, 200, result);
       }
@@ -158,6 +173,9 @@ export function createDaemon() {
         const author = url.searchParams.get('author');
         const counterparty = url.searchParams.get('counterparty');
         const bondId = url.searchParams.get('bond_id');
+        // 'all' (default): public events + this node's decryptable gift wraps.
+        // 'public' / 'private' narrow to one transport.
+        const visibility = url.searchParams.get('visibility') ?? 'all';
         if (author) filter.authors = [pubkeyHexFromIdentity(author)];
         if (counterparty) filter['#p'] = [pubkeyHexFromIdentity(counterparty)];
         if (bondId) filter['#d'] = [bondId];
@@ -174,7 +192,24 @@ export function createDaemon() {
           }
           filter.authors = [loadIdentity().pubkeyHex];
         }
-        return json(res, 200, await listBonds(filter, relaysFrom(url)));
+
+        const pub =
+          visibility === 'private'
+            ? { relaysReached: [] as string[], bonds: [] }
+            : await listBonds(filter, relaysFrom(url));
+        const priv =
+          visibility !== 'public' && hasIdentity()
+            ? await listPrivateBonds(loadSecret(), relaysFrom(url), {
+                bondId: bondId ?? undefined,
+                author: author ?? undefined,
+                counterparty: counterparty ?? undefined,
+              })
+            : { relaysReached: [] as string[], bonds: [] };
+
+        return json(res, 200, {
+          relaysReached: [...new Set([...pub.relaysReached, ...priv.relaysReached])],
+          bonds: [...pub.bonds, ...priv.bonds].sort((a, b) => b.created_at - a.created_at),
+        });
       }
       if (path === '/bonds/verify' && method === 'GET') {
         const bondId = url.searchParams.get('bond_id');
@@ -203,7 +238,14 @@ export function createDaemon() {
           }
         }
 
-        const { relaysReached, bonds } = await listBonds({ '#d': [bondId] }, relaysFrom(url));
+        // Public events always count; gift-wrapped sides are included when this
+        // node holds a key that can decrypt them. To anyone else a private bond
+        // is invisible — verification of one is disclosure-mediated by design.
+        const pubSide = await listBonds({ '#d': [bondId] }, relaysFrom(url));
+        const privSide = hasIdentity()
+          ? await listPrivateBonds(loadSecret(), relaysFrom(url), { bondId })
+          : { relaysReached: [] as string[], bonds: [] };
+        const bonds = [...pubSide.bonds, ...privSide.bonds];
         const authors = new Set(bonds.map((b) => b.author));
         const mutual =
           bonds.length >= 2 &&
@@ -213,9 +255,10 @@ export function createDaemon() {
           bond_id: bondId,
           paid: paywalled ? true : undefined,
           price_sats: paywalled ? VERIFY_PRICE_SATS : undefined,
-          relaysReached,
+          relaysReached: [...new Set([...pubSide.relaysReached, ...privSide.relaysReached])],
           count: bonds.length,
           mutual,
+          private: bonds.some((b) => b.visibility === 'private') || undefined,
           bonds,
         });
       }
@@ -342,9 +385,12 @@ function startEventStream(req: IncomingMessage, res: ServerResponse, url: URL): 
 
   const poll = async (): Promise<void> => {
     try {
-      const { bonds } = await listBonds({ '#p': [self] }, relays);
-      for (const b of bonds) {
-        const key = `${b.bond}:${b.author}`;
+      const [pub, priv] = await Promise.all([
+        listBonds({ '#p': [self] }, relays),
+        listPrivateBonds(loadSecret(), relays, { counterparty: self }),
+      ]);
+      for (const b of [...pub.bonds, ...priv.bonds]) {
+        const key = `${b.bond}:${b.author}:${b.visibility}`;
         if (seen.get(key) !== (b.state ?? '')) {
           seen.set(key, b.state ?? '');
           res.write(`event: bond\ndata: ${JSON.stringify(b)}\n\n`);

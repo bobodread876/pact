@@ -153,7 +153,7 @@ This keeps the sovereignty promise intact while still allowing the network-effec
 
 - **Authenticity** — every bond/event verified via L1 signatures; no trust in the transport.
 - **Consent integrity** — a counterparty's state only counts when carried by *their* signed event; no forged acceptance.
-- **Privacy** — public bonds by default; **private bonds via NIP-44 encryption + NIP-59 gift-wrap**, with `d`/`p` tags blinded. Sovereign users can keep a relationship entirely off public relays.
+- **Privacy** — public bonds by default; **private bonds via NIP-44 + NIP-59 gift wrap** (shipped: pact-core 0.3.0 / pactd 0.14.0, mechanism in MATE.md extension §13). The bond event stays an unsigned rumor wrapped once for the counterparty and once for the author (copy-to-self); relays see an ephemeral signer, the recipient `p` tag, and a fuzzed timestamp — no bond id, state, or counterparty linkage. Because rumors are unsigned, every private bond document carries an **embedded BIP-340 proof**, so either party can selectively disclose the document and the disclosure is independently verifiable. Verification of a private bond is parties-only by design: `verifyBond` without the decryption key finds nothing.
 - **Process isolation** — the sidecar holds keys separately from the (often less-trusted) agent process.
 - **Supply chain** — reproducible builds, signed releases — table stakes for a sovereign-computing audience.
 

@@ -1,13 +1,15 @@
 {
   "name": "pact-pactd",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "pactd — the Pact sidecar daemon: run the agent-relationship layer alongside any agent platform over localhost HTTP.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "pactd": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js"
@@ -16,6 +18,6 @@
     "@noble/hashes": "^2.0.1",
     "@noble/secp256k1": "^3.0.0",
     "@scure/base": "^2.0.0",
-    "pact-core": "^0.2.0"
+    "pact-core": "^0.3.0"
   }
 }

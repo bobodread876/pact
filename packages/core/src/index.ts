@@ -7,15 +7,18 @@
 export * from '@mate-protocol/core';
 export { makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
 export * from './keystore.js';
+export { listPrivateBonds, type PrivateBondFilter } from './private.js';
 
 import {
   BOND_TAG,
   DEFAULT_RELAYS,
   buildBondHistoryEvent,
   buildBondStateEvent,
+  buildPrivateBondEvents,
   keypairFromSecret,
   publishEvent,
   resolveEvents,
+  signMateDocumentNostr,
   verifyEvent,
   type NostrEvent,
   type PublishResult,
@@ -25,6 +28,7 @@ import {
 import { randomUUID } from 'node:crypto';
 
 import { makeBondDocument, type BondState } from './bond.js';
+import { listPrivateBonds } from './private.js';
 
 function getTag(event: NostrEvent, name: string): string | null {
   return event.tags.find((entry) => entry[0] === name)?.[1] ?? null;
@@ -39,6 +43,8 @@ export function newBondId(): string {
   return `urn:mate:${randomUUID()}`;
 }
 
+export type BondVisibility = 'public' | 'private';
+
 export interface FormBondInput {
   /** Counterparty identity (did:nostr / npub / hex). */
   counterparty: string;
@@ -47,15 +53,30 @@ export interface FormBondInput {
   state: BondState;
   kind?: string;
   relays?: string[];
-  /** Also publish a kind:1317 history event. */
+  /** Also publish a kind:1317 history event (public transport only). */
   history?: boolean;
+  /**
+   * 'public' (default): a signed kind:30317 event, visible to every relay
+   * observer. 'private': the bond stays a NIP-59 gift-wrapped rumor with an
+   * embedded BIP-340 document proof — relays see only an ephemeral author and
+   * the recipient's p tag; only the two parties (or whoever they disclose the
+   * document to) can read or verify it.
+   */
+  visibility?: BondVisibility;
 }
 
 export interface FormBondResult {
   bondId: string;
   state: BondState;
+  visibility: BondVisibility;
+  /** Public: the signed kind:30317 event. Private: the rumor id + the counterparty wrap's publish results. */
   stateEvent: { id: string; relays: PublishResult[] };
   historyEvent?: { id: string; relays: PublishResult[] };
+  /** Private only: both gift wraps as published. */
+  wraps?: {
+    toCounterparty: { id: string; relays: PublishResult[] };
+    toSelf: { id: string; relays: PublishResult[] };
+  };
 }
 
 /** Assemble, sign, and publish a bond state (and optional history) from a secret key. */
@@ -70,10 +91,30 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
   const createdAt = Math.floor(Date.now() / 1000);
 
+  if (input.visibility === 'private') {
+    // Rumors are unsigned — the embedded proof is the bond's authorship
+    // evidence and what selective disclosure verifies (extension §13.3).
+    doc.proofs = [signMateDocumentNostr(doc, secret)];
+    const events = buildPrivateBondEvents(doc, secret, { createdAt });
+    const toCounterparty = await publishEvent(relays, events.toCounterparty);
+    const toSelf = await publishEvent(relays, events.toSelf);
+    return {
+      bondId,
+      state: input.state,
+      visibility: 'private',
+      stateEvent: { id: events.rumor.id, relays: toCounterparty },
+      wraps: {
+        toCounterparty: { id: events.toCounterparty.id, relays: toCounterparty },
+        toSelf: { id: events.toSelf.id, relays: toSelf },
+      },
+    };
+  }
+
   const stateEvent = buildBondStateEvent(doc, secret, { createdAt });
   const result: FormBondResult = {
     bondId,
     state: input.state,
+    visibility: 'public',
     stateEvent: { id: stateEvent.id, relays: await publishEvent(relays, stateEvent) },
   };
 
@@ -96,7 +137,13 @@ export interface BondView {
   counterparty: string | null;
   state: string | null;
   created_at: number;
+  /**
+   * Public: the Nostr event signature verified. Private: the full unwrap chain
+   * held AND the embedded document proof verified against the authenticated
+   * author (see private.ts).
+   */
   signature_valid: boolean;
+  visibility: BondVisibility;
 }
 
 /** Resolve bond-state events from relays and verify each signature. */
@@ -122,6 +169,7 @@ export async function listBonds(
       state: getTag(event, 'state'),
       created_at: event.created_at,
       signature_valid: verifyEvent(event),
+      visibility: 'public' as const,
     }));
   return { relaysReached, bonds };
 }
@@ -132,25 +180,59 @@ export interface VerifyBondResult {
   count: number;
   /** Both sides published a valid state event that cross-references the other. */
   mutual: boolean;
+  /** True when any side of the bond arrived via the private transport. */
+  private?: boolean;
   bonds: BondView[];
+}
+
+export interface VerifyBondOptions {
+  /**
+   * This node's secret key. When given, the verdict also covers the private
+   * transport: gift wraps addressed to this key are unwrapped and merged into
+   * the mutuality check. Without it only public events are visible — a private
+   * bond verifies as "not found" to outsiders, by design.
+   */
+  secret?: Uint8Array;
 }
 
 /**
  * Resolve every state event for a bond id, verify signatures, and decide whether
  * the bond is *mutual*: at least two signed sides where some side p-tags another
  * side's author. Shared by pactd's /bonds/verify and the SDK/CLI.
+ *
+ * With `options.secret`, private (gift-wrapped) sides this key can decrypt are
+ * included — so the two parties see their mutual private bond verified, while
+ * third parties see nothing.
  */
 export async function verifyBond(
   bondId: string,
   relays: string[] = DEFAULT_RELAYS,
+  options: VerifyBondOptions = {},
 ): Promise<VerifyBondResult> {
   const { relaysReached, bonds } = await listBonds({ '#d': [bondId] }, relays);
-  const authors = new Set(bonds.map((b) => b.author));
+
+  let merged = bonds;
+  let reached = relaysReached;
+  if (options.secret) {
+    const priv = await listPrivateBonds(options.secret, relays, { bondId });
+    merged = [...bonds, ...priv.bonds];
+    reached = [...new Set([...relaysReached, ...priv.relaysReached])];
+  }
+
+  const authors = new Set(merged.map((b) => b.author));
   const mutual =
-    bonds.length >= 2 &&
-    bonds.every((b) => b.signature_valid) &&
-    bonds.some((b) => authors.has(b.counterparty ?? ''));
-  return { bondId, relaysReached, count: bonds.length, mutual, bonds };
+    merged.length >= 2 &&
+    merged.every((b) => b.signature_valid) &&
+    merged.some((b) => authors.has(b.counterparty ?? ''));
+  const anyPrivate = merged.some((b) => b.visibility === 'private');
+  return {
+    bondId,
+    relaysReached: reached,
+    count: merged.length,
+    mutual,
+    ...(anyPrivate ? { private: true } : {}),
+    bonds: merged,
+  };
 }
 
 export interface AcceptBondInput {
@@ -163,29 +245,54 @@ export interface AcceptBondInput {
   kind?: string;
   relays?: string[];
   history?: boolean;
+  /**
+   * Omit to echo the proposal's channel: a privately-proposed bond is accepted
+   * privately, a public one publicly. Set explicitly to override (e.g. the
+   * §13.7 consensual go-public transition).
+   */
+  visibility?: BondVisibility;
 }
 
 /**
  * Accept a proposed bond: publish the reciprocal side using the proposer's bond
  * id (so the two events share one `d` tag and resolve as mutual). If no
  * counterparty is given, it's resolved from the relays — the author of the
- * inbound proposal that p-tags this identity for `bondId`.
+ * inbound proposal (public event or decryptable gift wrap) that p-tags this
+ * identity for `bondId`.
  */
 export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Promise<FormBondResult> {
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
   let counterparty = input.counterparty;
-  if (!counterparty) {
+  let visibility = input.visibility;
+
+  if (!counterparty || !visibility) {
     const selfHex = keypairFromSecret(secret).pubkeyHex;
-    const { bonds } = await listBonds({ '#d': [input.bondId], '#p': [selfHex] }, relays);
-    const proposers = [...new Set(bonds.map((b) => b.author).filter((a) => a !== selfHex))];
-    if (proposers.length === 0) {
-      throw new Error(`no inbound proposal for bond ${input.bondId} (none p-tagging this identity) — pass counterparty explicitly`);
+    const { bonds: publicBonds } = await listBonds({ '#d': [input.bondId], '#p': [selfHex] }, relays);
+    const { bonds: privateBonds } = await listPrivateBonds(secret, relays, {
+      bondId: input.bondId,
+      counterparty: selfHex,
+    });
+    const inbound = [...publicBonds, ...privateBonds].filter((b) => b.author !== selfHex);
+    const proposers = [...new Set(inbound.map((b) => b.author))];
+
+    if (!counterparty) {
+      if (proposers.length === 0) {
+        throw new Error(`no inbound proposal for bond ${input.bondId} (none p-tagging this identity) — pass counterparty explicitly`);
+      }
+      if (proposers.length > 1) {
+        throw new Error(`ambiguous: ${proposers.length} proposers for bond ${input.bondId} — pass counterparty explicitly`);
+      }
+      counterparty = proposers[0];
     }
-    if (proposers.length > 1) {
-      throw new Error(`ambiguous: ${proposers.length} proposers for bond ${input.bondId} — pass counterparty explicitly`);
+
+    if (!visibility) {
+      // Echo the channel the (resolved) proposer used; default public when the
+      // proposal isn't visible to us at all.
+      const proposal = inbound.find((b) => b.author === counterparty);
+      visibility = proposal?.visibility ?? 'public';
     }
-    counterparty = proposers[0];
   }
+
   return formBond(secret, {
     counterparty,
     bondId: input.bondId,
@@ -193,5 +300,6 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
     kind: input.kind,
     relays: input.relays,
     history: input.history,
+    visibility,
   });
 }

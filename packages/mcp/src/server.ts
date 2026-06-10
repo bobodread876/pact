@@ -40,7 +40,7 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.2.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.8.0' });
 
   server.tool(
     'pact_keygen',
@@ -58,32 +58,57 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_form_bond',
-    'Declare or update a relationship bond toward a counterparty and publish it via the daemon. state="proposed" to offer, "accepted"/"active" to reciprocate, "revoked" to end.',
+    'Declare or update a relationship bond toward a counterparty and publish it via the daemon. state="proposed" to offer, "accepted"/"active" to reciprocate, "revoked" to end. Set private=true to keep the bond off the public graph (NIP-59 gift wrap: relays see no bond id, state, or counterparty linkage; only the two parties can read or verify it).',
     {
       counterparty: z.string().describe('Counterparty identity: did:nostr / npub / 64-hex pubkey.'),
-      bond_id: z.string().describe('Stable bond id shared by both parties, e.g. "urn:mate:my-bond-01".'),
+      bond_id: z.string().optional().describe('Stable bond id shared by both parties. Omit to auto-generate urn:mate:<uuid>.'),
       state: z.enum(BOND_STATES).default('proposed').describe('Bond state to declare.'),
       kind: z.string().default('companion').describe('Relationship kind (e.g. companion, collaboration).'),
+      private: z.boolean().default(false).describe('Gift-wrap the bond instead of publishing it publicly. The document carries an embedded BIP-340 proof so it stays verifiable on selective disclosure.'),
       relays: z.array(z.string()).optional().describe('Relay URLs (defaults to the daemon\'s configured relays).'),
-      history: z.boolean().default(true).describe('Also publish a kind:1317 history event.'),
+      history: z.boolean().default(true).describe('Also publish a kind:1317 history event (public bonds only).'),
     },
-    async ({ counterparty, bond_id, state, kind, relays, history }) =>
-      text(await daemon('POST', '/bonds', { counterparty, bondId: bond_id, state, kind, relays, history })),
+    async ({ counterparty, bond_id, state, kind, relays, history, private: priv }) =>
+      text(await daemon('POST', '/bonds', { counterparty, bondId: bond_id, state, kind, relays, history, private: priv })),
+  );
+
+  server.tool(
+    'pact_accept_bond',
+    "Accept an inbound bond proposal by echoing its bond id (so both sides share one id and resolve as mutual). The proposer is auto-resolved from the inbox — public events and decryptable private gift wraps both count — and the accept is published on the SAME channel the proposal used (private proposal → private accept) unless overridden.",
+    {
+      bond_id: z.string().describe("The proposer's bond id to echo."),
+      counterparty: z.string().optional().describe('The proposer identity. Omit to auto-resolve from the inbound proposal.'),
+      state: z.enum(BOND_STATES).default('active').describe('State to publish on accept.'),
+      private: z.boolean().optional().describe('Override the channel: true forces a private accept, false forces public. Omit to echo the proposal.'),
+      relays: z.array(z.string()).optional().describe('Relay URLs (defaults to the daemon\'s configured relays).'),
+    },
+    async ({ bond_id, counterparty, state, private: priv, relays }) =>
+      text(
+        await daemon('POST', '/bonds/accept', {
+          bondId: bond_id,
+          counterparty,
+          state,
+          relays,
+          ...(priv === undefined ? {} : { visibility: priv ? 'private' : 'public' }),
+        }),
+      ),
   );
 
   server.tool(
     'pact_list_bonds',
-    "Resolve relationship bonds via the daemon and verify each signature. Filter by bond id, counterparty, or author. With no filter, lists this agent's own bonds.",
+    "Resolve relationship bonds via the daemon and verify each. Covers both transports: public signed events, plus private gift-wrapped bonds this agent can decrypt. Filter by bond id, counterparty, author, or visibility. With no filter, lists this agent's own bonds and full private inbox.",
     {
       bond_id: z.string().optional().describe('Match a specific bond id.'),
       counterparty: z.string().optional().describe('Match bonds toward this identity.'),
       author: z.string().optional().describe('Match bonds authored by this identity.'),
+      visibility: z.enum(['all', 'public', 'private']).default('all').describe('Narrow to one transport.'),
     },
-    async ({ bond_id, counterparty, author }) => {
+    async ({ bond_id, counterparty, author, visibility }) => {
       const qs = new URLSearchParams();
       if (bond_id) qs.set('bond_id', bond_id);
       if (counterparty) qs.set('counterparty', counterparty);
       if (author) qs.set('author', author);
+      if (visibility !== 'all') qs.set('visibility', visibility);
       const suffix = qs.toString() ? `?${qs}` : '';
       return text(await daemon('GET', `/bonds${suffix}`));
     },
@@ -91,7 +116,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_verify_bond',
-    'Verify a bond via the daemon (signatures + mutual check). If the daemon charges for verification it returns a Lightning invoice (status 402); pay it and call again with payment_hash.',
+    "Verify a bond via the daemon (signatures + mutual check). Private bond sides this agent can decrypt are included; to anyone without the key a private bond is invisible by design (verification of one is disclosure-mediated). If the daemon charges for verification it returns a Lightning invoice (status 402); pay it and call again with payment_hash.",
     {
       bond_id: z.string().describe('The bond id to verify.'),
       payment_hash: z.string().optional().describe('Payment hash of a paid invoice, to satisfy a paywalled verify.'),

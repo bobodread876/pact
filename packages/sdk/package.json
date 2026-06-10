@@ -1,6 +1,6 @@
 {
   "name": "pact-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Pact SDK — embed agent-relationship bonds in your TypeScript app (no daemon, no MCP).",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,11 +12,13 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc"
   },
   "dependencies": {
-    "pact-core": "^0.2.0"
+    "pact-core": "^0.3.0"
   }
 }
