@@ -127,10 +127,26 @@ function npubFromHex(hex) {
 }
 const shortAddr = (hex) => { const n = npubFromHex(hex); return n.length > 21 ? n.slice(0, 13) + '\\u2026' + n.slice(-4) : n; };
 function copyText(text, btn) {
-  navigator.clipboard.writeText(text).then(() => {
-    const old = btn.textContent; btn.textContent = 'Copied \\u2713';
-    setTimeout(() => { btn.textContent = old; }, 1500);
-  });
+  const done = (ok) => {
+    const old = btn.textContent;
+    btn.textContent = ok ? 'Copied \\u2713' : 'Copy failed \\u2014 select it manually';
+    setTimeout(() => { btn.textContent = old; }, ok ? 1500 : 3000);
+  };
+  // navigator.clipboard requires a secure context (https / localhost); Umbrel
+  // and LAN access are plain http, so fall back to execCommand there.
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  done(ok);
 }
 
 const DATA_CARDS = ['identity-card', 'bonds-card', 'form-card', 'wallet-card', 'relays-card'];
