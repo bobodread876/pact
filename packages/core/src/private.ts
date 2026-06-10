@@ -16,6 +16,7 @@ import {
   type PrivateBondRumor,
 } from '@mate-protocol/core';
 
+import { kindFromContent } from './bond.js';
 import type { BondView } from './index.js';
 
 export interface PrivateBondFilter {
@@ -54,6 +55,7 @@ function toBondView(r: PrivateBondRumor): BondView {
     bond: r.bond,
     counterparty: r.counterparty,
     state: r.state,
+    kind: kindFromContent(r.rumor.content),
     created_at: r.rumor.created_at,
     signature_valid: proofValid,
     visibility: 'private',

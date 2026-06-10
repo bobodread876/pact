@@ -5,7 +5,7 @@
 // (L2 depends on L1; L1 never depends on L2.)
 
 export * from '@mate-protocol/core';
-export { makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
+export { kindFromContent, makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
 export * from './keystore.js';
 export { listPrivateBonds, type PrivateBondFilter } from './private.js';
 
@@ -27,7 +27,7 @@ import {
 
 import { randomUUID } from 'node:crypto';
 
-import { makeBondDocument, type BondState } from './bond.js';
+import { kindFromContent, makeBondDocument, type BondState } from './bond.js';
 import { listPrivateBonds } from './private.js';
 
 function getTag(event: NostrEvent, name: string): string | null {
@@ -136,6 +136,8 @@ export interface BondView {
   bond: string | null;
   counterparty: string | null;
   state: string | null;
+  /** bond.kind from the carried MATE.md document, when parseable. */
+  kind: string | null;
   created_at: number;
   /**
    * Public: the Nostr event signature verified. Private: the full unwrap chain
@@ -167,6 +169,7 @@ export async function listBonds(
       bond: getTag(event, 'd'),
       counterparty: getTag(event, 'p'),
       state: getTag(event, 'state'),
+      kind: kindFromContent(event.content),
       created_at: event.created_at,
       signature_valid: verifyEvent(event),
       visibility: 'public' as const,
