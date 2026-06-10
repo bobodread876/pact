@@ -14,6 +14,16 @@ export type BondState =
   | 'expired'
   | 'archived';
 
+/** bond.kind from an event's carried MATE.md document content, if parseable. */
+export function kindFromContent(content: string): string | null {
+  try {
+    const doc = JSON.parse(content) as { bond?: { kind?: unknown } };
+    return typeof doc.bond?.kind === 'string' ? doc.bond.kind : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface MakeBondOptions {
   bondId: string;
   state: BondState;
