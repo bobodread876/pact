@@ -14,12 +14,14 @@ const HELP = `pact — agent relationship bonds from the shell
 Usage:
   pact keygen [--force]              Create the local identity (~/.pact)
   pact whoami                        Show this node's identity
-  pact bond form <counterparty> [bondId] [--state proposed] [--kind <k>] [--no-history]
+  pact bond form <counterparty> [bondId] [--state proposed] [--kind <k>] [--no-history] [--private]
                                      Propose a bond. Omit bondId to auto-generate urn:mate:<uuid>.
-  pact bond accept <bondId> [--from <counterparty>] [--state active]
-                                     Accept a proposed bond (echoes its id; proposer auto-resolved).
-  pact bond list [--author <id>] [--counterparty <id>] [--bond-id <id>]
-  pact bond verify <bondId>
+                                     --private: NIP-59 gift wrap — off the public graph, parties-only.
+  pact bond accept <bondId> [--from <counterparty>] [--state active] [--private|--public]
+                                     Accept a proposed bond (echoes its id; proposer auto-resolved;
+                                     channel echoes the proposal unless --private/--public override).
+  pact bond list [--author <id>] [--counterparty <id>] [--bond-id <id>] [--visibility all|public|private]
+  pact bond verify <bondId>          (private sides this key can decrypt are included)
 
 Identity (did:nostr / npub / hex) is resolved automatically.
 
@@ -36,7 +38,8 @@ function out(json: boolean, human: string, data: unknown): void {
 
 function bondLine(b: BondView): string {
   const mark = b.signature_valid ? '✓' : '✗';
-  return `  ${mark} ${(b.state ?? '?').padEnd(10)} ${b.bond ?? '(no id)'}  ${b.author.slice(0, 12)}…`;
+  const lock = b.visibility === 'private' ? '🔒' : '  ';
+  return `  ${mark}${lock} ${(b.state ?? '?').padEnd(10)} ${b.bond ?? '(no id)'}  ${b.author.slice(0, 12)}…`;
 }
 
 async function main(): Promise<void> {
@@ -57,6 +60,9 @@ async function main(): Promise<void> {
       author: { type: 'string' },
       counterparty: { type: 'string' },
       'bond-id': { type: 'string' },
+      private: { type: 'boolean' },
+      public: { type: 'boolean' },
+      visibility: { type: 'string' },
     },
   });
 
@@ -107,11 +113,14 @@ async function main(): Promise<void> {
           state: (values.state as Parameters<typeof pact.formBond>[0]['state']) ?? 'proposed',
           kind: values.kind as string | undefined,
           history: !values['no-history'],
+          visibility: values.private ? 'private' : undefined,
         });
         const reached = result.stateEvent.relays.filter((r) => r.accepted).length;
         out(
           json,
-          `Bond '${result.bondId}' published as '${result.state}' (state event ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s)).`,
+          result.visibility === 'private'
+            ? `Private bond '${result.bondId}' wrapped as '${result.state}' (rumor ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s); copy-to-self published).`
+            : `Bond '${result.bondId}' published as '${result.state}' (state event ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s)).`,
           result,
         );
         return;
@@ -127,11 +136,12 @@ async function main(): Promise<void> {
         const result = await pact.acceptBond(bondId, {
           counterparty: values.from as string | undefined,
           state: values.state as BondState | undefined,
+          visibility: values.private ? 'private' : values.public ? 'public' : undefined,
         });
         const reached = result.stateEvent.relays.filter((r) => r.accepted).length;
         out(
           json,
-          `Accepted bond '${result.bondId}' as '${result.state}' (→ ${reached} relay(s)).`,
+          `Accepted bond '${result.bondId}' as '${result.state}'${result.visibility === 'private' ? ' (private)' : ''} (→ ${reached} relay(s)).`,
           result,
         );
         return;
@@ -142,6 +152,7 @@ async function main(): Promise<void> {
           author: values.author as string | undefined,
           counterparty: values.counterparty as string | undefined,
           bondId: values['bond-id'] as string | undefined,
+          visibility: (values.visibility as 'all' | 'public' | 'private' | undefined) ?? 'all',
         });
         out(
           json,

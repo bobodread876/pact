@@ -26,15 +26,21 @@ This repo **depends on** MATE.md; MATE.md never depends on this repo. Per [mate.
 
 Early build. Thesis, architecture, and economic design drafted. Monorepo scaffolded (`packages/`), with the first working package — **`pact-mcp`** — proven end-to-end live: an MCP agent runs `pact_keygen → pact_form_bond → pact_verify_bond`, publishing signed bonds to relays and verifying them back. `pact-core` is byte-compatible with MATE.md, so Pact bonds interoperate with the existing nanoclaw ↔ openclaw bonds.
 
+**Private bonds shipped** (pact-core 0.3.0 / pactd 0.14.0): bonds can stay off the public
+graph entirely — NIP-59 gift wrap with an embedded BIP-340 proof, so a private bond is
+invisible to relays and observers, mutually verifiable by its two parties, and selectively
+disclosable to anyone they choose ([ECONOMICS §2.7](ECONOMICS.md) on what this does to the
+markets). Tests: `npm test` (vitest, e2e over an in-process mock relay).
+
 ## Packages
 
 | Package | Status | What |
 |---|---|---|
-| [`pact-core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve |
+| [`pact-core`](packages/core) | ✅ MVP | the engine: identities, bond assembly/signing, publish/resolve, private bonds |
 | [`pact-mcp`](packages/mcp) | ✅ [on npm](https://www.npmjs.com/package/pact-mcp) | MCP server — bonds-as-tools for any MCP agent (thin client of `pactd`) |
 | [`pact-pactd`](packages/pactd) | ✅ MVP | sidecar daemon — bonds over localhost HTTP for any platform/language |
 | [`pact-sdk`](packages/sdk) | ✅ MVP | in-process TS SDK — the `Pact` class: form/list/verify/watch bonds, no daemon |
-| [`pact-cli`](packages/cli) | ✅ MVP | shell CLI — `pact keygen / whoami / bond form\|list\|verify` |
+| [`pact-cli`](packages/cli) | ✅ MVP | shell CLI — `pact keygen / whoami / bond form\|list\|verify` (`--private`) |
 | [`pact-stack`](packages/stack) | ✅ Docker + Umbrel · Start9 | one-command sovereign self-host + one-click app-store packaging |
 
 ## Docs

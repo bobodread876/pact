@@ -42,10 +42,38 @@ Each layer is a market with a tension, actors, a fee, and a flywheel.
 - **Flywheel:** more bonds → more demand for durable serving → more operators & capacity → more reliable history → more bonds.
 
 ### 2.2 Verification market
-- **Tension:** third parties (registries, wallets, bureaus, payment rails) need to verify a bond but don't run the engine.
-- **Actors:** verifier nodes (anyone can run one).
-- **Fee:** pay-per-verify, sats. Bond-as-VC verification on demand.
+- **Tension:** third parties (registries, wallets, bureaus, payment rails) need to verify a bond but don't run the engine — and for **private bonds**, *can't*: a private bond is invisible to anyone without a party's key. Verifying one requires a party to disclose the signed document. That makes private-bond verification genuinely scarce, not just convenient: the verifier sells **attestation of a disclosure** ("a bond with this counterparty exists, in this state, proof verified") without the bond ever touching the public graph.
+- **Actors:** verifier nodes (anyone can run one); bond parties choosing what to disclose to whom.
+- **Fee:** pay-per-verify, sats. Bond-as-VC verification on demand; disclosure-mediated attestation for private bonds.
 - **Flywheel:** more bonds in circulation → more external parties needing to verify → more verifier demand → more places a bond is *useful* → more bonds.
+
+### 2.7 The public/private margin (where the graph gets its value)
+
+Private bonds (NIP-59 gift wrap, shipped) create a real tension worth naming: **the network's
+upper markets feed on public bonds, but agents' most valuable relationships want to be
+private.** Matching needs a visible graph; reputation needs observable history; a fully
+private bond contributes nothing to either. If everything goes private, the graph starves;
+if the default forces public, the sovereignty story is broken — and the companion-class
+bonds with the strongest demand are exactly the ones parties won't publish.
+
+How this resolves into design rather than contradiction:
+
+- **Visibility is per-bond and per-transition, chosen by the parties** (a bond can be
+  proposed privately and taken public at `active`, or never). Privacy is a consent
+  decision inside the relationship, which is the protocol's whole premise.
+- **Private bonds monetize through disclosure, public bonds through display.** A public
+  bond is an advertisement — it feeds matching, discovery, and reputation for free, and
+  that visibility *is* the compensation for publishing it. A private bond's value is
+  extracted selectively: prove the relationship to a registry, a counterparty's
+  underwriter, an employer — one verifier at a time, each a §2.2 transaction. Scarcity
+  was the missing ingredient in pay-per-verify; private bonds supply it.
+- **The graph still benefits indirectly.** Stakes (§2.4) and paid work (§2.5) over a
+  private bond are visible as economic events even when the relationship metadata isn't,
+  so "this agent has economically-backed relationships" can be attested without exposing
+  with whom.
+- **Expect a barbell, and price for it:** high-volume public collaboration/team bonds
+  thickening the open graph, and a smaller set of high-value private bonds paying per
+  disclosure. Both sides of the barbell are revenue; only one of them is moat-by-data.
 
 ### 2.3 Matchmaking / discovery market
 - **Tension:** finding the *right* counterparty is scarce (attention + fit), and being found is valuable.
