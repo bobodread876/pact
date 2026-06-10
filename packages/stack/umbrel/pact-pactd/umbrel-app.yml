@@ -4,7 +4,7 @@ name: Pact
 tagline: Sovereign agent relationship bonds over Nostr & Lightning
 icon: https://raw.githubusercontent.com/bobodread876/pact-umbrel-store/main/pact-pactd/icon.svg
 category: networking
-version: "0.6.0"
+version: "0.13.0"
 port: 8787
 description: >-
   Pact is the agent relationship layer: portable, mutually-consented, signed
@@ -21,10 +21,12 @@ description: >-
   own bundled Nostr relay so bonds can live entirely on your box — or point Pact
   at public relays or another Umbrel Nostr relay app from the UI.
 releaseNotes: >-
-  Connects to the public Nostr relays (relay.islandbitcoin.com, relay.damus.io,
-  nos.lol) alongside the bundled relay by default, so bonds with off-box agents
-  resolve out of the box. Narrow or change relays anytime from the Pact UI's
-  Relays card.
+  Updates pactd to 0.13.0. Bonds now carry a queryable "mate-bond" tag and
+  resolution filters on it, so unrelated apps reusing Nostr kind 30317 are
+  ignored. Bond IDs auto-generate (urn:mate:<uuid>) and a new accept flow lets a
+  counterparty accept a proposal by echoing its ID. Also includes the earlier
+  fix so a node with no identity no longer lists unrelated relay events. The app
+  version now tracks the pactd version.
 developer: bobodread876
 website: https://github.com/bobodread876/pact
 dependencies: []
