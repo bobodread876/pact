@@ -12,7 +12,11 @@ import {
   keypairFromSecret,
   listBonds as coreListBonds,
   listPrivateBonds as coreListPrivateBonds,
+  closeIntent as coreCloseIntent,
+  discover as coreDiscover,
   listReaffirmations as coreListReaffirmations,
+  myIntent as coreMyIntent,
+  publishIntent as corePublishIntent,
   reaffirmBond as coreReaffirmBond,
   loadSecret,
   pubkeyHexFromIdentity,
@@ -22,12 +26,16 @@ import {
   type BondView,
   type BondVisibility,
   type FormBondResult,
+  type Candidate,
+  type DiscoverOptions,
+  type PublishIntentInput,
+  type PublishIntentResult,
   type ReaffirmBondResult,
   type ReaffirmationView,
   type VerifyBondResult,
 } from 'pact-core';
 
-export type { BondState, BondView, BondVisibility, FormBondResult, ReaffirmBondResult, ReaffirmationView, VerifyBondResult } from 'pact-core';
+export type { BondState, BondView, BondVisibility, Candidate, FormBondResult, ReaffirmBondResult, ReaffirmationView, VerifyBondResult } from 'pact-core';
 
 export interface PactOptions {
   /** Relays to publish/resolve on. Defaults to the protocol's default relays. */
@@ -241,6 +249,26 @@ export class Pact {
   /** Reaffirmations visible to this identity, latest-per-(bond, author). */
   listReaffirmations(relays?: string[]): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[] }> {
     return coreListReaffirmations(this.secret, relays ?? this.relays);
+  }
+
+  /** Publish (or update) this identity's bond intent — become findable. */
+  publishIntent(input: Omit<PublishIntentInput, 'relays'> & { relays?: string[] }): Promise<PublishIntentResult> {
+    return corePublishIntent(this.secret, { ...input, relays: input.relays ?? this.relays });
+  }
+
+  /** Unlist this identity from discovery. */
+  closeIntent(relays?: string[]): Promise<PublishIntentResult> {
+    return coreCloseIntent(this.secret, relays ?? this.relays);
+  }
+
+  /** This identity's current intent, if any. */
+  myIntent(relays?: string[]) {
+    return coreMyIntent(this.secret, relays ?? this.relays);
+  }
+
+  /** Browse the open board, ranked by public longevity records. */
+  discover(opts: DiscoverOptions = {}, relays?: string[]): Promise<{ relaysReached: string[]; candidates: Candidate[] }> {
+    return coreDiscover(relays ?? this.relays, opts, this.identity.pubkeyHex);
   }
 
   /**

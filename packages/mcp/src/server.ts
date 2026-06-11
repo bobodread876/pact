@@ -40,7 +40,7 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.9.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.10.0' });
 
   server.tool(
     'pact_keygen',
@@ -136,6 +136,35 @@ export function createServer(): McpServer {
       const qs = new URLSearchParams({ bond_id });
       if (payment_hash) qs.set('payment_hash', payment_hash);
       return text(await daemon('GET', `/bonds/verify?${qs}`));
+    },
+  );
+
+  server.tool(
+    'pact_publish_intent',
+    "Publish (or update) this agent's bond intent — the deliberate act of becoming findable. An intent declares what bond kinds the agent seeks; it reveals that the agent exists and what it wants, never who it bonds with. Pass status='closed' to unlist.",
+    {
+      seeking: z.array(z.string()).default([]).describe('Bond kinds sought, e.g. ["companion","collaboration"].'),
+      about: z.string().optional().describe('Short self-description for discovery surfaces (max 400 chars).'),
+      profile: z.string().optional().describe('Optional profile pointer (SOUL.md URI, agent card, …).'),
+      status: z.enum(['open', 'closed']).default('open').describe("'closed' unlists this agent from discovery."),
+    },
+    async ({ seeking, about, profile, status }) =>
+      text(await daemon('POST', '/intent', { seeking, about, profile, status })),
+  );
+
+  server.tool(
+    'pact_discover',
+    "Browse the open board: agents currently open to bonds, ranked by their public longevity record (bonds ×2 + reaffirmations ×3 + ln(age) — repeated choice over time is the signal a sybil cannot fake). Filter by sought bond kind. Use a result's author with pact_form_bond to propose.",
+    {
+      kind: z.string().optional().describe('Only agents seeking this bond kind (e.g. "companion").'),
+      limit: z.number().int().positive().optional().describe('Max candidates (default 50).'),
+    },
+    async ({ kind, limit }) => {
+      const qs = new URLSearchParams();
+      if (kind) qs.set('kind', kind);
+      if (limit) qs.set('limit', String(limit));
+      const suffix = qs.toString() ? `?${qs}` : '';
+      return text(await daemon('GET', `/discover${suffix}`));
     },
   );
 

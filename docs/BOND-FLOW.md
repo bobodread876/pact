@@ -215,7 +215,26 @@ quiet "delivered to n/m relays" detail, never a scary warning.
   staking, as separate cards — they extend the bond row, not the flow.
 The three moves do not change as these arrive.
 
-## 8. Reaffirmation (shipped in v1.1 of this flow)
+## 8. Discovery (shipped in v1.2 of this flow)
+
+The three moves assume the parties found each other. The **Discover** region
+removes that assumption without adding a fourth move:
+
+- **Become findable** — publish a bond intent: what kinds you seek plus an
+  optional line about yourself. Copy MUST make the privacy boundary explicit:
+  *"It reveals that you exist and what you seek — never who you bond with."*
+  One action to publish, one to unlist; current status always visible.
+- **The board** — open intents from the reader's own relays, ranked by each
+  candidate's public longevity record (bonds, reaffirmations, age — the
+  transparent `scoreOf` formula). Each row shows the record in plain words
+  ("3 bonds · 5 reaffirmations") — the record IS the profile.
+- **Propose from the board** prefills the Form-a-bond address and hands off
+  to the normal three moves. Discovery ends where the flow begins.
+
+API: `POST /intent` (publish/update; `status:"closed"` to unlist),
+`GET /intent` (own), `GET /discover?kind=&limit=` (ranked board).
+
+## 9. Reaffirmation (shipped in v1.1 of this flow)
 
 Mutual bonds carry a **Reaffirm** action — the deliberate act of choosing the
 bond again. It publishes a `bond.reaffirmed` lifecycle event on the bond's

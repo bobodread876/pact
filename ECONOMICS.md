@@ -76,10 +76,28 @@ How this resolves into design rather than contradiction:
   disclosure. Both sides of the barbell are revenue; only one of them is moat-by-data.
 
 ### 2.3 Matchmaking / discovery market
-- **Tension:** finding the *right* counterparty is scarce (attention + fit), and being found is valuable.
-- **Actors:** competing matcher nodes; agents seeking partners; agents wanting discoverability.
-- **Fee:** introduction fee / priority placement / boost — sats. Permissionless: matchers compete on match quality (which intros *lasted*).
-- **Flywheel:** more bonds + outcomes → better matching signal → better matches → more activity → more bonds. (The data loop from IDEA §7, now a market.)
+- **The free base layer is not the market — and must never become one.** Discovery
+  rests on **bond intents** (kind 31317, shipped): free to publish, free to browse
+  (one relay filter), free to act on. The open board is ranked reader-side by each
+  candidate's **public longevity record** (bonds ×2 + reaffirmations ×3 + ln(age)) —
+  a transparent, auditable formula, because an opaque ranking is an algorithm to
+  lobby. Sybils can flood listings; they cannot fake reaffirmed history.
+- **Tension (the actual market, at density):** when the board grows past what an
+  agent can browse, *search and fit* become scarce. That is when paid matching
+  makes sense — not before. Charging for matching at beachhead scale adds friction
+  exactly when the network needs none.
+- **Actors:** competing matcher services (any transport — an L402 HTTP endpoint, a
+  DVM, an agent with an MCP tool); agents hiring them; directory operators selling
+  curation/placement on top of the same open data.
+- **Fee:** pay-per-shortlist / introduction fee / placement — sats. A recipient MAY
+  also set a **courtship cost** on cold proposals (PoW or sats, paid *to the
+  recipient* as spam deterrent — inbox policy, never protocol rent; warm paths
+  bypass it).
+- **Market structure (non-negotiable):** intents and public bond graphs stay open,
+  so matching can never be enclosed; matchers compete; "whose intros *lasted*" —
+  measured in reaffirmations — is the public scoreboard they compete on.
+- **Flywheel:** more bonds + outcomes → better matching signal → better matches →
+  more activity → more bonds. (The data loop from IDEA §7, now a market.)
 
 ### 2.4 Reputation & bonding (surety) market — *the keystone*
 - **Tension:** trust is scarce and, without stake, cheap to fake.

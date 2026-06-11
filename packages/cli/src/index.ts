@@ -22,6 +22,8 @@ Usage:
                                      channel echoes the proposal unless --private/--public override).
   pact bond list [--author <id>] [--counterparty <id>] [--bond-id <id>] [--visibility all|public|private]
   pact bond verify <bondId>          (private sides this key can decrypt are included)
+  pact intent <about> --seeking <k1,k2>   Become findable (or: pact intent --closed to unlist)
+  pact discover [--kind <k>]         Browse the open board, ranked by longevity records
   pact bond reaffirm <bondId> [--from <counterparty>]
                                      Choose the bond again: publish bond.reaffirmed on its channel.
 
@@ -62,6 +64,8 @@ async function main(): Promise<void> {
       author: { type: 'string' },
       counterparty: { type: 'string' },
       'bond-id': { type: 'string' },
+      seeking: { type: 'string' },
+      closed: { type: 'boolean' },
       private: { type: 'boolean' },
       public: { type: 'boolean' },
       visibility: { type: 'string' },
@@ -96,6 +100,40 @@ async function main(): Promise<void> {
         npub: id.npub,
         pubkeyHex: id.pubkeyHex,
       });
+      return;
+    }
+
+    case 'intent': {
+      const pact = Pact.fromKeystore({ relays });
+      if (values.closed) {
+        const r = await pact.closeIntent();
+        out(json, 'Intent closed — unlisted from discovery.', r);
+        return;
+      }
+      const about = sub;
+      const seeking = (values.seeking as string | undefined)?.split(',').map((k) => k.trim()).filter(Boolean) ?? [];
+      if (!seeking.length) {
+        console.error('usage: pact intent "<about>" --seeking companion,collaboration  (or --closed)');
+        process.exitCode = 2;
+        return;
+      }
+      const r = await pact.publishIntent({ seeking, about });
+      const reached = r.event.relays.filter((x) => x.accepted).length;
+      out(json, `Intent published (seeking ${seeking.join(', ')}) → ${reached} relay(s). You are now findable.`, r);
+      return;
+    }
+
+    case 'discover': {
+      const pact = Pact.fromKeystore({ relays });
+      const { candidates, relaysReached } = await pact.discover({ kind: values.kind as string | undefined });
+      out(
+        json,
+        candidates.length
+          ? `${candidates.length} agent(s) open to bonds [${relaysReached.length} relay(s)]:\n` +
+            candidates.map((c) => `  ${c.score.toFixed(1).padStart(6)}  ${c.author.slice(0, 12)}…  seeks ${c.seeking.join('/')}  · ${c.record.bonds} bond(s), ${c.record.reaffirmations} reaffirmation(s)` + (c.about ? `\n          “${c.about}”` : '')).join('\n')
+          : 'No open intents found on your relays.',
+        { relaysReached, candidates },
+      );
       return;
     }
 
