@@ -1,6 +1,6 @@
 # Pact — Layered Incentive Markets (the flywheel)
 
-*Status: draft v0.1, 2026-06-07. The economic design pillar. Read alongside [IDEA.md](IDEA.md) (thesis) and [ARCHITECTURE.md](ARCHITECTURE.md) (system).* 
+*Status: draft v0.1, 2026-06-07. The economic design pillar. Read alongside [ARCHITECTURE.md](ARCHITECTURE.md) (system); the venture thesis lives in a private repo.* 
 
 ---
 

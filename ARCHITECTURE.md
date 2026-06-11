@@ -1,6 +1,6 @@
 # Pact — Architecture
 
-*Status: draft v0.1, 2026-06-07. Implements the thesis in [IDEA.md](IDEA.md). Built on [MATE.md](https://github.com/bobodread876/mate.md) (L1 protocol) + [NIP-BD](https://github.com/bobodread876/nips/tree/nip-agent-bonds) (transport).*
+*Status: draft v0.1, 2026-06-07. Implements the venture thesis (private docs). Built on [MATE.md](https://github.com/bobodread876/mate.md) (L1 protocol) + [NIP-BD](https://github.com/bobodread876/nips/tree/nip-agent-bonds) (transport).*
 
 ---
 

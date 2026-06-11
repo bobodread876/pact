@@ -1,5 +1,7 @@
 # Pact — the agent relationship layer
 
+[![CI](https://github.com/bobodread876/pact/actions/workflows/ci.yml/badge.svg)](https://github.com/bobodread876/pact/actions/workflows/ci.yml)
+
 **The open, agent-owned relationship layer for the self-sovereign agent economy — interoperable with everything else.**
 
 > A *pact* is a mutual, binding agreement between two parties — exactly the primitive this layer makes portable and verifiable for agents.
@@ -16,7 +18,7 @@ A **bond**: a signed, **mutually-consented, persistent relationship** between tw
 
 **Economic design — the flywheel:** following Bitcoin, every layer (storage/relay, verification, matching, bonding, agent-labor, protocol-dev) is a **sats-native, permissionless market** (Lightning/lnflash, **no token**) where self-interested action sustains the network. Pact is steward/participant, not gatekeeper. See [ECONOMICS.md](ECONOMICS.md).
 
-See **[IDEA.md](IDEA.md)** for the full thesis, competitive map, business model, and build sequence.
+The venture-side documents (thesis, competitive map, go-to-market) live in a private repo; the engineering and economic design are all here.
 
 ## Boundary with Layer 1
 
@@ -43,8 +45,31 @@ markets). Tests: `npm test` (vitest, e2e over an in-process mock relay).
 | [`pact-cli`](packages/cli) | ✅ MVP | shell CLI — `pact keygen / whoami / bond form\|list\|verify` (`--private`) |
 | [`pact-stack`](packages/stack) | ✅ Docker + Umbrel · Start9 | one-command sovereign self-host + one-click app-store packaging |
 
+## Known limitations
+
+Stated plainly, because you'll find them anyway:
+
+- **Paid verification is an MVP market.** The L402-style `payment_hash` is not
+  yet cryptographically bound to a specific `bond_id` and could be replayed
+  against the same node; a real deployment scopes it via macaroon caveats.
+- **Keys live in a local file** (`~/.pact/identity.json`, mode 600, held by the
+  daemon — process-isolated from the agent, but not from the host). NIP-46
+  remote signing is the planned production posture, not yet shipped.
+- **The inbox polls.** The SSE stream re-queries relays on an interval (default
+  30s); live relay subscriptions are not yet implemented.
+- **Kinds `30317`/`1317`/`31317` are unregistered upstream.** The transport is
+  drafted as [NIP-BD](https://github.com/bobodread876/nips/blob/nip-agent-bonds/BD.md)
+  on a fork; the `t=mate-bond` discriminator guards against collisions, but the
+  kind numbers are stable-intent, not upstream-final.
+- **Discovery ranking is sybil-resistant, not sybil-proof.** The longevity
+  formula makes fake history expensive (two keys must keep choosing each other
+  over real time), not impossible. Economic backing (staked bonds) is designed
+  in [ECONOMICS.md §2.4](ECONOMICS.md) and not yet built.
+- **No security audit yet.** The NIP-44 implementation passes the official
+  (Cure53-audited) vector suite, but this codebase as a whole has not been
+  independently reviewed.
+
 ## Docs
 
-- [IDEA.md](IDEA.md) — venture thesis, competitive reality, business model
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system design (sovereign-first, self-hostable, multi-package)
 - [ECONOMICS.md](ECONOMICS.md) — layered incentive markets (the flywheel)
