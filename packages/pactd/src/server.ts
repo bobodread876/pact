@@ -8,7 +8,11 @@ import {
   hasIdentity,
   listBonds,
   listPrivateBonds,
+  closeIntent,
+  discover,
   listReaffirmations,
+  myIntent,
+  publishIntent,
   reaffirmBond,
   loadIdentity,
   loadSecret,
@@ -25,7 +29,7 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.16.0';
+export const VERSION = '0.17.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
@@ -170,6 +174,37 @@ export function createDaemon() {
         });
         return json(res, 200, result);
       }
+      // --- discovery (bond intents — the open board) ---
+      if (path === '/intent' && method === 'POST') {
+        if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
+        const body = await readJson(req);
+        if (body.status === 'closed') {
+          return json(res, 200, await closeIntent(loadSecret(), Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS));
+        }
+        const seeking = Array.isArray(body.seeking)
+          ? (body.seeking as unknown[]).filter((k): k is string => typeof k === 'string')
+          : [];
+        if (seeking.length === 0) return json(res, 400, { error: 'seeking (array of bond kinds) is required' });
+        return json(res, 200, await publishIntent(loadSecret(), {
+          seeking,
+          about: typeof body.about === 'string' ? body.about.slice(0, 400) : undefined,
+          profile: typeof body.profile === 'string' ? body.profile : undefined,
+          relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
+        }));
+      }
+      if (path === '/intent' && method === 'GET') {
+        if (!hasIdentity()) return json(res, 200, { intent: null });
+        return json(res, 200, { intent: await myIntent(loadSecret(), relaysFrom(url)) });
+      }
+      if (path === '/discover' && method === 'GET') {
+        const selfHex = hasIdentity() ? loadIdentity().pubkeyHex : undefined;
+        const result = await discover(relaysFrom(url), {
+          kind: url.searchParams.get('kind') ?? undefined,
+          limit: Number(url.searchParams.get('limit')) || undefined,
+        }, selfHex);
+        return json(res, 200, result);
+      }
+
       if (path === '/bonds/reaffirm' && method === 'POST') {
         if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
         const body = await readJson(req);

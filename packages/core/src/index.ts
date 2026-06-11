@@ -9,6 +9,18 @@ export { kindFromContent, makeBondDocument, type BondState, type MakeBondOptions
 export * from './keystore.js';
 export { listPrivateBonds, type PrivateBondFilter } from './private.js';
 export {
+  publishIntent,
+  closeIntent,
+  discover,
+  myIntent,
+  scoreOf,
+  type PublishIntentInput,
+  type PublishIntentResult,
+  type LongevityRecord,
+  type Candidate,
+  type DiscoverOptions,
+} from './discover.js';
+export {
   REAFFIRM_TYPE,
   reaffirmBond,
   listReaffirmations,

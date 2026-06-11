@@ -188,7 +188,7 @@ Pact **depends on** MATE.md; MATE.md **never** depends on Pact (see mate.md `doc
 ## 14. Open questions
 
 - **Daemon language:** ship `pactd` in Node/Bun first for speed, or invest early in a Rust static binary for the sovereign/air-gapped story? (Leaning: Bun now, Rust port once adoption justifies.)
-- **Federated matching protocol:** what's the minimal open spec for community-run directory/matching nodes to peer, so "matching" never requires the Pact cloud?
+- ~~**Federated matching protocol:** what's the minimal open spec for community-run directory/matching nodes to peer, so "matching" never requires the Pact cloud?~~ **Answered (and de-federated): there is nothing to peer.** Discovery is open data — kind 31317 bond intents plus the public bond graph on ordinary relays — so any directory or matcher is just a reader of the same events. No federation protocol needed; matchers compete as services over open data (ECONOMICS §2.3), and the Pact cloud is one reader among many by construction.
 - **Private-bond UX:** how much of the gift-wrap/NIP-44 flow can be one-flag without footguns?
 - **VC profile:** which VC data model + status-list revocation scheme to standardize the bond-as-credential on, for clean wallet interop.
 - **Signer defaults:** push NIP-46 remote signing as the default for production, or keep local keystore default for friction?

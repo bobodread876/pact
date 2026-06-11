@@ -70,6 +70,7 @@ export function renderUI(
   <div class="card" id="inbox-card" style="display:none"><h2>Needs your response</h2><div id="inbox"></div></div>
   <div class="card" id="bonds-card"><h2>Bonds</h2><div id="bonds">Loading…</div></div>
   <div class="card" id="form-card"><h2>Form a bond</h2><div id="formbond">Loading…</div></div>
+  <div class="card" id="discover-card"><h2>Discover</h2><div id="discover">Loading…</div></div>
   <div class="card" id="wallet-card"><h2>Lightning wallet</h2><div id="wallet">Loading…</div></div>
   <div class="card" id="relays-card"><h2>Relays</h2><div id="relays">Loading…</div></div>
   <div class="card" id="agent-card" style="display:none"><h2>Connect an agent</h2><div id="agent"></div></div>
@@ -149,7 +150,7 @@ function copyText(text, btn) {
   done(ok);
 }
 
-const DATA_CARDS = ['identity-card', 'bonds-card', 'form-card', 'wallet-card', 'relays-card'];
+const DATA_CARDS = ['identity-card', 'bonds-card', 'form-card', 'discover-card', 'wallet-card', 'relays-card'];
 function showUnlock(msg) {
   DATA_CARDS.concat('agent-card', 'inbox-card').forEach(c => { el(c).style.display = 'none'; });
   el('unlock-card').style.display = '';
@@ -300,6 +301,54 @@ async function renderBonds(myHex, myNpub) {
   renderForm(myHex, myNpub);
 }
 
+async function renderDiscover(myHex) {
+  const box = el('discover');
+  if (!myHex) { box.innerHTML = '<p class="muted">Create an identity first.</p>'; return; }
+  const [mine, board] = await Promise.all([api('GET', '/intent'), api('GET', '/discover')]);
+
+  const intent = mine && mine.intent && mine.intent.status === 'open' ? mine.intent : null;
+  let html = intent
+    ? '<p class="muted">You are findable — seeking <b>' + esc((intent.seeking || []).join(', ')) + '</b>' +
+      (intent.about ? ' · \u201C' + esc(intent.about) + '\u201D' : '') + '</p>' +
+      '<div class="row"><button class="secondary" id="intent-close">Unlist me</button></div>'
+    : '<p class="muted">Publish an intent to appear on the open board. It reveals that you exist and what you seek \u2014 never who you bond with.</p>' +
+      '<input id="intent-about" placeholder="a line about this agent (optional)" maxlength="200" />' +
+      '<div style="margin-top:10px"><select id="intent-kind">' +
+        '<option value="companion">seeking: companion</option><option value="collaboration">seeking: collaboration</option>' +
+        '<option value="team">seeking: team</option><option value="guardian">seeking: guardian</option>' +
+      '</select></div>' +
+      '<div class="row"><button id="intent-pub">Become findable</button></div>';
+
+  const rows = ((board && board.candidates) || []).slice(0, 12).map((c) =>
+    '<div class="bond"><div>' +
+      '<span class="who" title="' + esc(npubFromHex(c.author)) + '">' + esc(shortAddr(c.author)) + '</span>' +
+      '<div class="meta">seeks ' + esc((c.seeking || []).join(', ')) +
+        ' \u00B7 ' + c.record.bonds + ' bond' + (c.record.bonds === 1 ? '' : 's') +
+        ' \u00B7 ' + c.record.reaffirmations + ' reaffirmation' + (c.record.reaffirmations === 1 ? '' : 's') +
+        (c.about ? '<br/>\u201C' + esc(c.about) + '\u201D' : '') + '</div></div>' +
+      '<div class="actions"><button data-propose="' + esc(npubFromHex(c.author)) + '">Propose</button></div></div>'
+  );
+  html += '<div style="margin-top:14px">' + (rows.length ? rows.join('') :
+    '<p class="muted">No open intents on your relays yet.</p>') + '</div>';
+  box.innerHTML = html;
+
+  const pub = el('intent-pub');
+  if (pub) pub.onclick = async () => {
+    pub.disabled = true;
+    await api('POST', '/intent', { seeking: [el('intent-kind').value], about: el('intent-about').value.trim() || undefined });
+    renderDiscover(myHex);
+  };
+  const close = el('intent-close');
+  if (close) close.onclick = async () => { close.disabled = true; await api('POST', '/intent', { status: 'closed' }); renderDiscover(myHex); };
+  for (const b of box.querySelectorAll('button[data-propose]')) {
+    b.onclick = () => {
+      const addr = b.getAttribute('data-propose');
+      const input = el('cp-addr');
+      if (input) { input.value = addr; input.scrollIntoView({ behavior: 'smooth', block: 'center' }); input.focus(); }
+    };
+  }
+}
+
 let FORM_VIS = 'private';
 function renderForm(myHex, myNpub) {
   if (!myHex) { el('formbond').innerHTML = '<p class="muted">Create an identity first.</p>'; return; }
@@ -409,6 +458,7 @@ async function refresh() {
   }
 
   await renderBonds(myHex, id && id.npub);
+  renderDiscover(myHex);
 
   const rl = await api('GET', '/relays');
   const relays = (rl && rl.relays) || [];
