@@ -7,6 +7,7 @@ import {
   acceptBond,
   closeIntent,
   discover,
+  scoreOf,
   formBond,
   generateNostrKeypair,
   keypairFromSecret,
@@ -44,6 +45,24 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await relay.close();
+});
+
+describe('longevity ranking formula (scoreOf)', () => {
+  // The age term is the load-bearing anti-sybil claim ("two keys must keep
+  // choosing each other over real time"). Tested directly because the mock
+  // relay stamps events at `now`, so integration can't vary age.
+  it('reaffirmations weigh more than bonds, which weigh more than nothing', () => {
+    expect(scoreOf({ bonds: 1, reaffirmations: 0, oldestBondDays: 0 })).toBeGreaterThan(scoreOf({ bonds: 0, reaffirmations: 0, oldestBondDays: 0 }));
+    expect(scoreOf({ bonds: 0, reaffirmations: 1, oldestBondDays: 0 })).toBeGreaterThan(scoreOf({ bonds: 1, reaffirmations: 0, oldestBondDays: 0 }));
+  });
+  it('age strictly increases score — a year-old bond outranks a fresh one, counts equal', () => {
+    const fresh = scoreOf({ bonds: 1, reaffirmations: 1, oldestBondDays: 0 });
+    const aged = scoreOf({ bonds: 1, reaffirmations: 1, oldestBondDays: 365 });
+    expect(aged).toBeGreaterThan(fresh);
+  });
+  it('age alone breaks ties between otherwise-identical records', () => {
+    expect(scoreOf({ bonds: 2, reaffirmations: 2, oldestBondDays: 90 })).toBeGreaterThan(scoreOf({ bonds: 2, reaffirmations: 2, oldestBondDays: 1 }));
+  });
 });
 
 describe('discovery', () => {
