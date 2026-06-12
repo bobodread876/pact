@@ -28,7 +28,7 @@ This repo **depends on** MATE.md; MATE.md never depends on this repo. Per [mate.
 
 Early build. Thesis, architecture, and economic design drafted. Monorepo scaffolded (`packages/`), with the first working package — **`pact-mcp`** — proven end-to-end live: an MCP agent runs `pact_keygen → pact_form_bond → pact_verify_bond`, publishing signed bonds to relays and verifying them back. `pact-core` is byte-compatible with MATE.md, so Pact bonds interoperate with the existing nanoclaw ↔ openclaw bonds.
 
-**Private bonds shipped** (pact-core 0.3.0 / pactd 0.14.0): bonds can stay off the public
+**Private bonds shipped** (pact-core 0.5.0 / pactd 0.18.0): bonds can stay off the public
 graph entirely — NIP-59 gift wrap with an embedded BIP-340 proof, so a private bond is
 invisible to relays and observers, mutually verifiable by its two parties, and selectively
 disclosable to anyone they choose ([ECONOMICS §2.7](ECONOMICS.md) on what this does to the
@@ -49,9 +49,11 @@ markets). Tests: `npm test` (vitest, e2e over an in-process mock relay).
 
 Stated plainly, because you'll find them anyway:
 
-- **Paid verification is an MVP market.** The L402-style `payment_hash` is not
-  yet cryptographically bound to a specific `bond_id` and could be replayed
-  against the same node; a real deployment scopes it via macaroon caveats.
+- **Paid verification** binds each invoice to one `bond_id` and is single-use,
+  enforced by a persisted ledger that survives restart (`ledger.ts`) — a settled
+  invoice can't be replayed, reused for a different bond, or satisfied by an
+  unrelated invoice on a shared wallet. It is still per-node (not a shared L402
+  macaroon scheme); a multi-node deployment would federate the ledger.
 - **Keys live in a local file** (`~/.pact/identity.json`, mode 600, held by the
   daemon — process-isolated from the agent, but not from the host). NIP-46
   remote signing is the planned production posture, not yet shipped.

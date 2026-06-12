@@ -22,14 +22,22 @@ import {
   type RelayFilter,
 } from 'pact-core';
 
-import { ownsPaymentHash, recordPaymentHash } from './ledger.js';
+import { timingSafeEqual } from 'node:crypto';
+
+import {
+  consumeVerification,
+  ownsPaymentHash,
+  recordPaymentHash,
+  recordVerificationInvoice,
+  verificationStatus,
+} from './ledger.js';
 import { lightningFrom } from './lightning.js';
 import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
 import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.17.0';
+export const VERSION = '0.18.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
@@ -82,7 +90,14 @@ function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 function authorized(req: IncomingMessage): boolean {
   if (!TOKEN) return true;
-  return req.headers.authorization === `Bearer ${TOKEN}`;
+  const header = req.headers.authorization;
+  if (typeof header !== 'string') return false;
+  const expected = `Bearer ${TOKEN}`;
+  // Constant-time compare — `===` short-circuits on the first differing byte,
+  // leaking a timing oracle on the token that gates the money endpoints.
+  const a = Buffer.from(header);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function relaysFrom(url: URL): string[] {
@@ -293,7 +308,12 @@ export function createDaemon() {
           const paymentHash = url.searchParams.get('payment_hash');
           if (!paymentHash) {
             const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
+            if (!inv.paymentHash) {
+              return json(res, 502, { error: 'wallet returned no payment hash; cannot gate verification' });
+            }
             recordPaymentHash(inv.paymentHash);
+            // Bind this invoice to this bond, single-use — see ledger.ts.
+            recordVerificationInvoice(inv.paymentHash, bondId);
             return json(res, 402, {
               error: 'payment required',
               price_sats: VERIFY_PRICE_SATS,
@@ -302,9 +322,25 @@ export function createDaemon() {
               hint: 'pay the invoice, then retry with &payment_hash=<hash>',
             });
           }
+          // Reject before bothering the wallet: the hash must be one we issued,
+          // for THIS bond, and not already redeemed. (Cheap local pre-check.)
+          const status = verificationStatus(paymentHash, bondId);
+          if (status === 'unknown') {
+            return json(res, 402, { error: 'unknown payment hash — request a fresh invoice for this bond', price_sats: VERIFY_PRICE_SATS });
+          }
+          if (status === 'wrong_bond') {
+            return json(res, 402, { error: 'payment hash was issued for a different bond', price_sats: VERIFY_PRICE_SATS });
+          }
+          if (status === 'spent') {
+            return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
+          }
           const look = await ln.lookupInvoice({ paymentHash });
           if (!look.paid) {
             return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+          }
+          // Authoritative single-use consume (synchronous; wins the race).
+          if (!consumeVerification(paymentHash, bondId)) {
+            return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
           }
         }
 
