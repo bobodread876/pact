@@ -11,7 +11,7 @@ It is a **thin adapter over a running [`pactd`](../pactd) daemon** — the daemo
 node packages/pactd/dist/index.js        # listens on 127.0.0.1:8787
 ```
 
-`pact-mcp` reaches it at `PACT_DAEMON_URL` (default `http://127.0.0.1:8787`). If the daemon uses `PACT_TOKEN`, set the same value for `pact-mcp`.
+`pact-mcp` reaches it at `PACT_DAEMON_URL` (default `http://127.0.0.1:8787`). pactd requires a bearer token by default: when targeting a **local** daemon, `pact-mcp` reads the persisted token from `<PACT_HOME>/token` automatically; for a remote daemon (or a daemon started with an explicit `PACT_TOKEN`), set the same `PACT_TOKEN` here.
 
 ## Tools
 

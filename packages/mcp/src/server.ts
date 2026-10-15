@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
@@ -6,7 +10,23 @@ import { z } from 'zod';
 // operations as MCP tools. So an MCP agent (Claude Code, etc.) acts as that one
 // sovereign pactd identity. Point it at the daemon with PACT_DAEMON_URL.
 const DAEMON_URL = (process.env.PACT_DAEMON_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
-const TOKEN = process.env.PACT_TOKEN; // matches the daemon's PACT_TOKEN, if set
+// Auth: an explicit PACT_TOKEN wins. Otherwise, when the target is the LOCAL
+// daemon (loopback), read the daemon's persisted token from <PACT_HOME>/token
+// (mode 600, same user) — pactd auth is default-on, and same-machine agents
+// must keep working without hand-copying the token.
+const TOKEN = process.env.PACT_TOKEN ?? loadLocalDaemonToken();
+
+function loadLocalDaemonToken(): string | undefined {
+  try {
+    const hostname = new URL(DAEMON_URL).hostname;
+    if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(hostname)) return undefined;
+    const home = process.env.PACT_HOME ?? join(homedir(), '.pact');
+    const token = readFileSync(join(home, 'token'), 'utf8').trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const BOND_STATES = ['proposed', 'accepted', 'active', 'paused', 'revoked', 'withdrawn', 'rejected'] as const;
 
