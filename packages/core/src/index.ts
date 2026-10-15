@@ -7,6 +7,7 @@
 export * from '@mate-protocol/core';
 export { kindFromContent, makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
 export * from './keystore.js';
+export { clearUnlisted, isUnlisted, markUnlisted } from './unlisted.js';
 export { listPrivateBonds, type PrivateBondFilter } from './private.js';
 export {
   publishIntent,

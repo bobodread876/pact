@@ -21,6 +21,7 @@ import {
   newBondId,
   secretFromNsec,
 } from '../packages/core/src/index.js';
+import { Pact } from '../packages/sdk/src/index.js';
 import { startMockRelay, type MockRelay } from './mock-relay.js';
 
 let relay: MockRelay;
@@ -238,6 +239,38 @@ describe('PACT_INTENT_SEEKING: the explicit install-time choice', () => {
       expect((await intentconfig.applyConfiguredIntent(secret, [fresh.url], env))?.status).toBe('open');
     } finally {
       await fresh.close();
+    }
+  });
+
+  it('SDK/CLI: a keystore-backed closeIntent records the unlist; publishIntent lifts it; ephemeral keys never touch disk', async () => {
+    const sdkHome = mkdtempSync(join(tmpdir(), 'pact-optin-sdk-'));
+    const prevHome = process.env.PACT_HOME;
+    process.env.PACT_HOME = sdkHome;
+    const fresh = await startMockRelay();
+    const env = { PACT_INTENT_SEEKING: 'collaboration' };
+    try {
+      const pact = Pact.fromKeystore({ relays }); // what `pact intent --closed` uses
+      const secret = loadSecret();
+      await pact.publishIntent({ seeking: ['collaboration'] });
+      await pact.closeIntent();
+      expect(intentconfig.isUnlisted(secret)).toBe(true);
+      // Next boot on a relay that never saw the close: still not re-listed.
+      expect(await intentconfig.applyConfiguredIntent(secret, [fresh.url], env)).toBeNull();
+      expect(await myIntent(secret, [fresh.url])).toBeNull();
+
+      await pact.publishIntent({ seeking: ['team'] });
+      expect(intentconfig.isUnlisted(secret)).toBe(false);
+      await pact.publishIntent({ seeking: [], status: 'closed' });
+      expect(intentconfig.isUnlisted(secret)).toBe(true);
+
+      // An ephemeral client has no keystore: closing it must not mark the keystore identity.
+      intentconfig.clearUnlisted();
+      await Pact.generate({ relays }).closeIntent();
+      expect(intentconfig.isUnlisted(secret)).toBe(false);
+    } finally {
+      await fresh.close();
+      process.env.PACT_HOME = prevHome;
+      rmSync(sdkHome, { recursive: true, force: true });
     }
   });
 
