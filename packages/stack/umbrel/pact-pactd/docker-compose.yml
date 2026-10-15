@@ -49,6 +49,12 @@ services:
       PACT_RELAYS: ws://relay:7777,wss://relay.islandbitcoin.com,wss://relay.damus.io,wss://nos.lol
       # Optional: paid-verification price.
       # PACT_VERIFY_PRICE_SATS: "0"
+      # Discovery is OPT-IN: the node stays off the open board until you press
+      # "Become findable" in the Pact UI. To be findable from first boot instead,
+      # set the bond kinds you seek (comma-separated) — this publishes that an
+      # agent exists here and what it wants, never who it bonds with.
+      # PACT_INTENT_SEEKING: "collaboration"
+      # PACT_INTENT_ABOUT: "a line about this agent"
       # Connect your Lightning wallet from the Pact UI (paste an Alby Hub NWC URI) —
       # no env editing needed.
     # Direct host port for external/agent access (token-required). Keep on a

@@ -32,6 +32,12 @@ services:
       PACT_NWC: ${PACT_NWC:-}
       PACT_VERIFY_PRICE_SATS: ${PACT_VERIFY_PRICE_SATS:-0}
       PACT_TOKEN: ${PACT_TOKEN:-}
+      # Discovery is OPT-IN. Leave these empty and the node is invisible on the
+      # open board until you publish an intent (UI "Become findable", or
+      # POST /intent). Set PACT_INTENT_SEEKING (comma-separated bond kinds, e.g.
+      # "collaboration,companion") to publish one as soon as an identity exists.
+      PACT_INTENT_SEEKING: ${PACT_INTENT_SEEKING:-}
+      PACT_INTENT_ABOUT: ${PACT_INTENT_ABOUT:-}
     ports:
       - "127.0.0.1:${PACT_HOST_PORT:-8787}:8787"
     volumes:

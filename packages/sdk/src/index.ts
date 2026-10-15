@@ -12,6 +12,7 @@ import {
   keypairFromSecret,
   listBonds as coreListBonds,
   listPrivateBonds as coreListPrivateBonds,
+  clearUnlisted,
   closeIntent as coreCloseIntent,
   discover as coreDiscover,
   listReaffirmations as coreListReaffirmations,
@@ -19,6 +20,7 @@ import {
   publishIntent as corePublishIntent,
   reaffirmBond as coreReaffirmBond,
   loadSecret,
+  markUnlisted,
   pubkeyHexFromIdentity,
   secretFromNsec,
   verifyBond as coreVerifyBond,
@@ -92,10 +94,13 @@ export class Pact {
 
   private readonly secret: Uint8Array;
   private readonly relays: string[];
+  /** True when the key came from the local keystore: unlists are then recorded next to it. */
+  private readonly keystore: boolean;
 
-  private constructor(secret: Uint8Array, relays: string[]) {
+  private constructor(secret: Uint8Array, relays: string[], keystore = false) {
     this.secret = secret;
     this.relays = relays.length ? relays : DEFAULT_RELAYS;
+    this.keystore = keystore;
     const kp = keypairFromSecret(secret);
     this.identity = { did: kp.did, npub: kp.npub, pubkeyHex: kp.pubkeyHex };
   }
@@ -126,7 +131,7 @@ export class Pact {
       }
       ensureIdentity();
     }
-    return new Pact(loadSecret(), opts.relays ?? []);
+    return new Pact(loadSecret(), opts.relays ?? [], true);
   }
 
   /** Whether the local keystore already holds an identity. */
@@ -252,12 +257,21 @@ export class Pact {
   }
 
   /** Publish (or update) this identity's bond intent — become findable. */
-  publishIntent(input: Omit<PublishIntentInput, 'relays'> & { relays?: string[] }): Promise<PublishIntentResult> {
-    return corePublishIntent(this.secret, { ...input, relays: input.relays ?? this.relays });
+  async publishIntent(input: Omit<PublishIntentInput, 'relays'> & { relays?: string[] }): Promise<PublishIntentResult> {
+    if (input.status === 'closed') return this.closeIntent(input.relays);
+    const result = await corePublishIntent(this.secret, { ...input, relays: input.relays ?? this.relays });
+    // An explicit open intent is the operator re-listing: lift a recorded unlist.
+    if (this.keystore) clearUnlisted();
+    return result;
   }
 
-  /** Unlist this identity from discovery. */
+  /**
+   * Unlist this identity from discovery. With a keystore-backed client the
+   * unlist is also recorded next to the key, so an install-time intent
+   * (PACT_INTENT_SEEKING on pactd) never re-lists it, whatever the relays say.
+   */
   closeIntent(relays?: string[]): Promise<PublishIntentResult> {
+    if (this.keystore) markUnlisted(this.secret);
     return coreCloseIntent(this.secret, relays ?? this.relays);
   }
 

@@ -40,11 +40,11 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.10.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.11.0' });
 
   server.tool(
     'pact_keygen',
-    "Create this agent's self-sovereign Nostr identity (did:nostr) on the local pactd daemon. Idempotent unless force=true.",
+    "Create this agent's self-sovereign Nostr identity (did:nostr) on the local pactd daemon. Idempotent unless force=true. The response says whether the identity is discoverable: a new identity never is — appearing on the open board is a separate, opt-in step (pact_publish_intent) that reveals the agent exists, so ask the operator before taking it.",
     { force: z.boolean().default(false).describe('Regenerate even if an identity already exists (destructive).') },
     async ({ force }) => text(await daemon('POST', '/identity', { force })),
   );
@@ -74,20 +74,22 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_accept_bond',
-    "Accept an inbound bond proposal by echoing its bond id (so both sides share one id and resolve as mutual). The proposer is auto-resolved from the inbox — public events and decryptable private gift wraps both count — and the accept is published on the SAME channel the proposal used (private proposal → private accept) unless overridden.",
+    "Accept an inbound bond proposal by echoing its bond id (so both sides share one id and resolve as mutual). The proposer is auto-resolved from the inbox — public events and decryptable private gift wraps both count — and the accept echoes the proposal's channel (private proposal → private accept) AND its kind unless either is overridden explicitly. The result includes whether this agent is discoverable; if not, that is an opt-in choice for the operator (pact_publish_intent), not something to do automatically.",
     {
       bond_id: z.string().describe("The proposer's bond id to echo."),
       counterparty: z.string().optional().describe('The proposer identity. Omit to auto-resolve from the inbound proposal.'),
       state: z.enum(BOND_STATES).default('active').describe('State to publish on accept.'),
+      kind: z.string().optional().describe("Omit to echo the proposal's kind (the default — both sides then describe the same relationship). Set only to deliberately describe it differently; the two documents will disagree on kind."),
       private: z.boolean().optional().describe('Override the channel: true forces a private accept, false forces public. Omit to echo the proposal.'),
       relays: z.array(z.string()).optional().describe('Relay URLs (defaults to the daemon\'s configured relays).'),
     },
-    async ({ bond_id, counterparty, state, private: priv, relays }) =>
+    async ({ bond_id, counterparty, state, kind, private: priv, relays }) =>
       text(
         await daemon('POST', '/bonds/accept', {
           bondId: bond_id,
           counterparty,
           state,
+          ...(kind === undefined ? {} : { kind }),
           relays,
           ...(priv === undefined ? {} : { visibility: priv ? 'private' : 'public' }),
         }),
