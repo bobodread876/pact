@@ -24,24 +24,19 @@ services:
       - "7777:7777"
 
   web:
-    # Pinned to the pactd release (= this app's version; CI checks both).
-    image: ghcr.io/bobodread876/pactd:0.20.1
+    image: ghcr.io/bobodread876/pactd:latest
     restart: on-failure
     depends_on:
       - relay
     environment:
       PACT_HOST: 0.0.0.0
       PACT_PORT: "8787"
-      # Bearer token for external/agent API access — deterministic per-install,
-      # derived from the app's Umbrel seed.
-      PACT_TOKEN: ${APP_SEED}
-      # The UI (port 8787) is reached ONLY through app_proxy, i.e. behind the
-      # Umbrel login, so it may carry the token for its own API calls and show
-      # it in "Connect an agent". Never set this on a directly published port.
-      PACT_UI_EMBED_TOKEN: "1"
-      # API-only listener for agents: no UI page at all (GET / → 404), so the
-      # directly published port below never serves the token. Token required.
-      PACT_API_PORT: "8788"
+      # Bearer auth is default-on: pactd generates + persists a random token in
+      # the app data dir (data/.pact/token, mode 600) — auto-derived from the
+      # Umbrel seed is gone (deterministic secrets leak). The UI never carries
+      # the token; agents read it from the file or you paste it into the UI's
+      # lock screen.
+      PACT_PUBLIC_MODE: "1"
       # The host-mapped direct port (below), so the UI's "Connect an agent"
       # command shows the right URL instead of the app_proxy login port.
       PACT_PUBLIC_PORT: "3737"
@@ -56,18 +51,11 @@ services:
       PACT_RELAYS: ws://relay:7777,wss://relay.islandbitcoin.com,wss://relay.damus.io,wss://nos.lol
       # Optional: paid-verification price.
       # PACT_VERIFY_PRICE_SATS: "0"
-      # Discovery is OPT-IN: the node stays off the open board until you press
-      # "Become findable" in the Pact UI. To be findable from first boot instead,
-      # set the bond kinds you seek (comma-separated) — this publishes that an
-      # agent exists here and what it wants, never who it bonds with.
-      # PACT_INTENT_SEEKING: "collaboration"
-      # PACT_INTENT_ABOUT: "a line about this agent"
       # Connect your Lightning wallet from the Pact UI (paste an Alby Hub NWC URI) —
       # no env editing needed.
-    # Direct host port for external/agent access: the API-only listener
-    # (token required on every endpoint; no UI, nothing token-bearing served).
-    # The web UI is at the Umbrel app URL, behind the Umbrel login.
+    # Direct host port for external/agent access (token-required). Keep on a
+    # trusted LAN. The web UI is also at the Umbrel app URL (behind Umbrel login).
     ports:
-      - "3737:8788"
+      - "3737:8787"
     volumes:
       - ${APP_DATA_DIR}/data:/data
