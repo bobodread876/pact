@@ -1,0 +1,71 @@
+// Discovery is opt-in. Nothing in pactd ever publishes a bond intent on its
+// own: becoming findable reveals that an agent exists and what it seeks, and
+// relays keep that history even after the intent is closed. What this module
+// does instead is (a) tell callers, at the moments that matter, that the node
+// is NOT yet discoverable and how to opt in, and (b) honor an operator's
+// explicit install-time choice (PACT_INTENT_SEEKING) by publishing the intent
+// they asked for once an identity exists.
+
+import { myIntent, publishIntent, type PublishIntentResult } from 'pact-core';
+
+export const INTENT_SEEKING_ENV = 'PACT_INTENT_SEEKING';
+export const INTENT_ABOUT_ENV = 'PACT_INTENT_ABOUT';
+
+export interface ConfiguredIntent {
+  seeking: string[];
+  about?: string;
+}
+
+export interface DiscoveryStatus {
+  /** True when this identity has an open intent on the configured relays. */
+  discoverable: boolean;
+  /** Present only when not discoverable: how to opt in. */
+  hint?: string;
+}
+
+export const NOT_DISCOVERABLE_HINT =
+  'Not discoverable yet: this identity is not on the open board. Publishing a bond intent is opt-in — ' +
+  'it reveals that the agent exists and what it seeks (never who it bonds with), and relays keep that record. ' +
+  'To opt in, POST /intent {"seeking":["collaboration"]} (pact-mcp: pact_publish_intent). ' +
+  'Check with the operator before doing so.';
+
+/** The operator's install-time intent, if they set one. Never defaults to anything. */
+export function configuredIntent(env: NodeJS.ProcessEnv = process.env): ConfiguredIntent | null {
+  const raw = env[INTENT_SEEKING_ENV];
+  if (!raw) return null;
+  const seeking = [...new Set(raw.split(',').map((k) => k.trim()).filter(Boolean))];
+  if (seeking.length === 0) return null;
+  const about = env[INTENT_ABOUT_ENV]?.trim().slice(0, 400);
+  return { seeking, ...(about ? { about } : {}) };
+}
+
+/** Whether this identity currently has an open intent (plus the opt-in hint when it doesn't). */
+export async function discoveryStatus(secret: Uint8Array, relays: string[]): Promise<DiscoveryStatus> {
+  const intent = await myIntent(secret, relays);
+  const open = !!intent && intent.status !== 'closed';
+  return open ? { discoverable: true } : { discoverable: false, hint: NOT_DISCOVERABLE_HINT };
+}
+
+function sameIntent(a: ConfiguredIntent, b: { seeking?: string[]; about?: string; status?: string } | null): boolean {
+  if (!b || b.status === 'closed') return false;
+  const bs = [...(b.seeking ?? [])].sort();
+  const as = [...a.seeking].sort();
+  return as.length === bs.length && as.every((k, i) => k === bs[i]) && (a.about ?? '') === (b.about ?? '');
+}
+
+/**
+ * Publish the operator-configured intent if one is set and the relays don't
+ * already carry it. Returns null when nothing is configured or nothing changed.
+ * Idempotent: safe to call on every startup.
+ */
+export async function applyConfiguredIntent(
+  secret: Uint8Array,
+  relays: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<PublishIntentResult | null> {
+  const wanted = configuredIntent(env);
+  if (!wanted) return null;
+  const current = await myIntent(secret, relays);
+  if (sameIntent(wanted, current)) return null;
+  return publishIntent(secret, { seeking: wanted.seeking, about: wanted.about, relays });
+}

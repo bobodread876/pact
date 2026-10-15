@@ -32,12 +32,13 @@ import {
   verificationStatus,
 } from './ledger.js';
 import { lightningFrom } from './lightning.js';
+import { applyConfiguredIntent, configuredIntent, discoveryStatus } from './intentconfig.js';
 import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
 import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.18.0';
+export const VERSION = '0.19.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
 // token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
@@ -60,6 +61,23 @@ const VERIFY_PRICE_SATS = Math.max(0, Math.floor(Number(process.env.PACT_VERIFY_
 // PACT_RELAYS env > the protocol defaults. Mutable so it can be (re)configured
 // at runtime — pick public relays, a bundled relay, or another relay app.
 let RELAYS = resolveRelays();
+
+/** The relay set the daemon is currently publishing to (startup hooks read this). */
+export function currentRelays(): string[] {
+  return RELAYS;
+}
+
+// Discovery is opt-in (see intentconfig.ts). This annotates a response with
+// whether the identity is findable, and how to opt in when it isn't, at the
+// moments an operator would naturally decide: identity creation and the first
+// mutual bond. Relay trouble must never fail the operation it decorates.
+async function withDiscovery<T extends object>(body: T, secret: Uint8Array): Promise<T & { discoverable?: boolean; hint?: string }> {
+  try {
+    return { ...body, ...(await discoveryStatus(secret, RELAYS)) };
+  } catch {
+    return body;
+  }
+}
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -138,7 +156,19 @@ export function createDaemon() {
       }
       if (path === '/identity' && method === 'POST') {
         const body = await readJson(req);
-        return json(res, 200, ensureIdentity(Boolean(body.force)));
+        const identity = ensureIdentity(Boolean(body.force));
+        // A fresh key has no intent anywhere. If the operator pre-chose one
+        // (PACT_INTENT_SEEKING), honor that explicit choice now that a key
+        // exists; otherwise just say the node isn't discoverable and how to opt in.
+        if (identity.created && configuredIntent()) {
+          try {
+            const intent = await applyConfiguredIntent(loadSecret(), RELAYS);
+            return json(res, 200, { ...identity, discoverable: true, intent });
+          } catch (error) {
+            return json(res, 200, { ...identity, discoverable: false, hint: `configured intent not published: ${String(error)}` });
+          }
+        }
+        return json(res, 200, await withDiscovery(identity, loadSecret()));
       }
 
       // --- bonds ---
@@ -161,7 +191,10 @@ export function createDaemon() {
           history: visibility === 'private' ? false : body.history === undefined ? true : Boolean(body.history),
           visibility,
         });
-        return json(res, 200, result);
+        // Reciprocating (accepted/active) is the "first bond" moment — the
+        // natural point to mention that the board is still opt-in.
+        const reciprocal = result.state === 'accepted' || result.state === 'active';
+        return json(res, 200, reciprocal ? await withDiscovery(result, loadSecret()) : result);
       }
       if (path === '/bonds/accept' && method === 'POST') {
         if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
@@ -182,12 +215,14 @@ export function createDaemon() {
           // Omit counterparty to auto-resolve the proposer from the inbound proposal.
           counterparty: typeof body.counterparty === 'string' ? body.counterparty : undefined,
           state: (typeof body.state === 'string' ? body.state : 'active') as BondState,
+          // Omit kind to echo the proposal's kind; passing one is a deliberate
+          // choice to describe the relationship differently than the proposer.
           kind: typeof body.kind === 'string' ? body.kind : undefined,
           relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
           history: body.history === undefined ? true : Boolean(body.history),
           visibility: acceptVisibility,
         });
-        return json(res, 200, result);
+        return json(res, 200, await withDiscovery(result, loadSecret()));
       }
       // --- discovery (bond intents — the open board) ---
       if (path === '/intent' && method === 'POST') {

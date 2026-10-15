@@ -88,6 +88,8 @@ export interface FormBondInput {
 export interface FormBondResult {
   bondId: string;
   state: BondState;
+  /** The relationship kind carried by the published document. */
+  kind: string;
   visibility: BondVisibility;
   /** Public: the signed kind:30317 event. Private: the rumor id + the counterparty wrap's publish results. */
   stateEvent: { id: string; relays: PublishResult[] };
@@ -121,6 +123,7 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
     return {
       bondId,
       state: input.state,
+      kind: doc.bond.kind ?? 'companion',
       visibility: 'private',
       stateEvent: { id: events.rumor.id, relays: toCounterparty },
       wraps: {
@@ -134,6 +137,7 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
   const result: FormBondResult = {
     bondId,
     state: input.state,
+    kind: doc.bond.kind ?? 'companion',
     visibility: 'public',
     stateEvent: { id: stateEvent.id, relays: await publishEvent(relays, stateEvent) },
   };
@@ -265,6 +269,11 @@ export interface AcceptBondInput {
   counterparty?: string;
   /** State to publish on accept. Defaults to `active`. */
   state?: BondState;
+  /**
+   * Omit to echo the proposal's kind, so both sides describe the same
+   * relationship. Set explicitly only to deliberately change it — the two
+   * documents will then disagree on kind, which verifiers can see.
+   */
   kind?: string;
   relays?: string[];
   history?: boolean;
@@ -287,8 +296,9 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
   let counterparty = input.counterparty;
   let visibility = input.visibility;
+  let kind = input.kind;
 
-  if (!counterparty || !visibility) {
+  if (!counterparty || !visibility || !kind) {
     const selfHex = keypairFromSecret(secret).pubkeyHex;
     const { bonds: publicBonds } = await listBonds({ '#d': [input.bondId], '#p': [selfHex] }, relays);
     const { bonds: privateBonds } = await listPrivateBonds(secret, relays, {
@@ -314,13 +324,21 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
       const proposal = inbound.find((b) => b.author === counterparty);
       visibility = proposal?.visibility ?? 'public';
     }
+
+    if (!kind) {
+      // Echo the proposer's kind. Falls back to the document default when the
+      // proposal isn't visible to us (the caller passed counterparty for a
+      // proposal we can't resolve) — the explicit `kind` input overrides both.
+      const proposal = inbound.find((b) => b.author === counterparty);
+      kind = proposal?.kind ?? undefined;
+    }
   }
 
   return formBond(secret, {
     counterparty,
     bondId: input.bondId,
     state: input.state ?? 'active',
-    kind: input.kind,
+    kind,
     relays: input.relays,
     history: input.history,
     visibility,

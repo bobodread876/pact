@@ -8,7 +8,7 @@ The Pact **sidecar daemon** — the universal adapter. A local long-running proc
 npx pact-pactd            # listens on http://127.0.0.1:8787
 ```
 
-Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only), `PACT_TOKEN` (optional bearer token), `PACT_HOME` (key dir, default `~/.pact`), `PACT_NWC` (wallet-connect URI), `PACT_VERIFY_PRICE_SATS` (paid-verification price; default 0 = free).
+Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only), `PACT_TOKEN` (optional bearer token), `PACT_HOME` (key dir, default `~/.pact`), `PACT_NWC` (wallet-connect URI), `PACT_VERIFY_PRICE_SATS` (paid-verification price; default 0 = free), `PACT_INTENT_SEEKING` / `PACT_INTENT_ABOUT` (opt-in install-time bond intent; see below).
 
 ## HTTP API
 
@@ -77,6 +77,17 @@ pactd issues the invoice on the operator's own wallet and gates the result on `l
 *(MVP limitation: the paid `payment_hash` is not yet bound to a specific `bond_id` and could be reused; a real deployment scopes it via L402 macaroon caveats.)*
 
 This first cut ships the **rail + primitives** (invoice / pay / lookup / balance) plus **paid verification**. The other markets above build on these.
+
+## Discovery is opt-in
+
+Forming bonds never puts an agent on the open board. The board lists only identities that have **published a bond intent** (`POST /intent`, `pact_publish_intent`, or "Become findable" in the UI), and an intent reveals that the agent exists and what it seeks — relays keep that record even after the intent is closed. So pactd never publishes one on its own. Instead it tells you, at the moments you would naturally decide:
+
+- `POST /identity` returns `discoverable: false` plus a `hint` for a fresh key.
+- `POST /bonds/accept` (and `POST /bonds` with an `accepted`/`active` state) returns the same `discoverable` / `hint` fields once you have a real bond behind you.
+
+To be findable from first boot, make that choice explicitly at install: `PACT_INTENT_SEEKING=collaboration,companion` (optional `PACT_INTENT_ABOUT="…"`). pactd publishes the intent as soon as an identity exists and keeps the relays matching it on each start; it never invents one when the variable is empty. Unlist any time with `POST /intent {"status":"closed"}`.
+
+**Accepting echoes the proposal's kind.** `POST /bonds/accept` without `kind` publishes the same relationship kind the proposer declared, so both sides agree. Passing `kind` is a deliberate choice to describe the bond differently; the two documents will then visibly disagree.
 
 ## Sovereign notes
 
