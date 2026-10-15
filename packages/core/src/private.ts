@@ -10,7 +10,6 @@ import {
   KIND_GIFT_WRAP,
   keypairFromSecret,
   pubkeyHexFromIdentity,
-  resolveEvents,
   selectBondRumors,
   verifyProof,
   type MateDocument,
@@ -23,16 +22,87 @@ import { kindFromContent } from './bond.js';
 import type { BondView } from './index.js';
 import { latestPerKey } from './mutual.js';
 
-/** Wraps fetched per page when reading an inbox. */
+/** Wraps requested per page when reading an inbox (a relay may cap it lower). */
 const INBOX_PAGE = 200;
-/** Upper bound on pages read (INBOX_PAGE × this wraps), so a flood can't hang a read. */
+/** Upper bound on pages read per relay, so a flood can't hang a read. */
 const INBOX_MAX_PAGES = 50;
+/** Per-page relay timeout. */
+const PAGE_TIMEOUT_MS = 8000;
+
+interface PageResult {
+  /** The socket opened. */
+  reached: boolean;
+  events: NostrEvent[];
+  /** The relay said EOSE: it has sent everything it will for this filter. */
+  eose: boolean;
+  /** The relay answered CLOSED (rate limit, auth, error) instead of finishing. */
+  closed?: string;
+}
+
+/**
+ * One NIP-01 REQ against one relay, reporting HOW it ended. resolveEvents from
+ * @mate-protocol/core returns whatever arrived before EOSE, a timeout, a
+ * socket error, or a CLOSED alike — fine for a best-effort lookup, but a
+ * paging reader must not mistake "the relay stopped answering" for "history
+ * ends here". Only a page ending in EOSE is a complete page.
+ */
+function queryPage(relay: string, filter: RelayFilter, timeoutMs = PAGE_TIMEOUT_MS): Promise<PageResult> {
+  return new Promise((resolve) => {
+    const events: NostrEvent[] = [];
+    const subId = `pact-inbox-${Math.random().toString(36).slice(2, 10)}`;
+    let reached = false;
+    let settled = false;
+    let ws: WebSocket;
+    const finish = (eose: boolean, closed?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (eose && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(['CLOSE', subId]));
+        ws.close();
+      } catch {
+        // ignore
+      }
+      resolve({ reached, events, eose, ...(closed === undefined ? {} : { closed }) });
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    try {
+      ws = new WebSocket(relay);
+    } catch {
+      clearTimeout(timer);
+      resolve({ reached: false, events, eose: false });
+      return;
+    }
+    ws.addEventListener('open', () => {
+      reached = true;
+      ws.send(JSON.stringify(['REQ', subId, filter]));
+    });
+    ws.addEventListener('error', () => finish(false));
+    ws.addEventListener('close', () => finish(false));
+    ws.addEventListener('message', (ev) => {
+      let msg: unknown;
+      try {
+        msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
+      } catch {
+        return;
+      }
+      if (!Array.isArray(msg) || msg[1] !== subId) return;
+      if (msg[0] === 'EVENT' && msg[2]) events.push(msg[2] as NostrEvent);
+      else if (msg[0] === 'EOSE') finish(true);
+      else if (msg[0] === 'CLOSED') finish(false, String(msg[2] ?? ''));
+    });
+  });
+}
 
 /**
  * Fetch every kind:1059 gift wrap addressed to `secret`'s key, paging backwards
  * with `until` cursors. One fixed window is not enough: the inbox is
  * public-write and shared with NIP-17 DMs, and NIP-59 backdates wraps by up to
  * two days, so a single page of the newest wraps can push a real proposal out.
+ *
+ * `truncated` is set whenever some relay's history could not be read to the
+ * end. Consumers must then treat the inbox as incomplete — a withdrawal may be
+ * hiding in what was not read — rather than act on what they got.
  */
 export async function fetchInbox(
   secret: Uint8Array,
@@ -41,10 +111,6 @@ export async function fetchInbox(
   const selfHex = keypairFromSecret(secret).pubkeyHex;
   const byId = new Map<string, NostrEvent>();
   const reached = new Set<string>();
-  // Set when any relay's history could not be read to the end: more than a
-  // page of wraps within one second (the cursor can't split a second), or the
-  // page budget ran out. Consumers must treat the inbox as incomplete then —
-  // a withdrawal may be hiding below — rather than act on what they got.
   let truncated = false;
   // One cursor PER relay. A shared cursor takes the minimum created_at across
   // relays, so a relay whose first page only covered the last few minutes
@@ -55,6 +121,8 @@ export async function fetchInbox(
   await Promise.all(
     relays.map(async (relay) => {
       let until: number | undefined;
+      // Set after a page made entirely of the cursor's second was stepped past.
+      let steppedPastSecond = false;
       for (let page = 0; page < INBOX_MAX_PAGES; page++) {
         const filter = {
           kinds: [KIND_GIFT_WRAP],
@@ -62,29 +130,50 @@ export async function fetchInbox(
           limit: INBOX_PAGE,
           ...(until === undefined ? {} : { until }),
         } as RelayFilter;
-        const { events, relaysReached } = await resolveEvents([relay], filter);
-        for (const r of relaysReached) reached.add(r);
+        const res = await queryPage(relay, filter);
+        if (!res.reached) {
+          // Down from the start: not reached, which relaysReached reports.
+          // Down partway through: what it already served is partial history.
+          if (page > 0) truncated = true;
+          return;
+        }
+        reached.add(relay);
         let oldest = Infinity;
-        for (const event of events) {
+        for (const event of res.events) {
           if (!byId.has(event.id)) byId.set(event.id, event);
           oldest = Math.min(oldest, event.created_at);
         }
-        // Stop when this relay's page is short (its history is exhausted).
-        // `until` is inclusive, so events sharing the oldest second are
-        // re-read, never lost; events already seen from another relay still
-        // advance this relay's cursor.
-        if (events.length < INBOX_PAGE || !Number.isFinite(oldest)) break;
-        if (until !== undefined && oldest >= until) {
-          // A full page within one second: the cursor cannot advance through
-          // it. Step past that second so older history is still read, and
-          // flag the read — whatever else sat in that second is lost.
+        // A page that ended without EOSE (timeout, dropped socket) or with
+        // CLOSED (rate limit) says nothing about what lies below it.
+        if (!res.eose) {
           truncated = true;
+          return;
+        }
+        // Only an empty page proves this relay's history is exhausted. A short
+        // page does not: relays may cap `limit` below what we ask for.
+        if (!Number.isFinite(oldest)) return;
+        if (steppedPastSecond) {
+          // Older history exists below a page that was all one second. An
+          // uncapped relay would have served it in that page, so the relay
+          // capped it: that second was served at the cap and may hold more.
+          truncated = true;
+          steppedPastSecond = false;
+        }
+        if (until !== undefined && oldest >= until) {
+          // Nothing older than the cursor (`until` is inclusive, so its second
+          // is re-read). Either history ends here, or the page is saturated by
+          // that one second and the cursor cannot advance through it. Step
+          // past the second to find out: a full page is flagged now, a short
+          // one only if older history turns up (see above).
+          if (res.events.length >= INBOX_PAGE) truncated = true;
+          else steppedPastSecond = true;
           until = oldest - 1;
           continue;
         }
         until = oldest;
-        if (page === INBOX_MAX_PAGES - 1) truncated = true;
       }
+      // Page budget exhausted with history still coming.
+      truncated = true;
     }),
   );
   return { relaysReached: [...reached], events: [...byId.values()], truncated };
@@ -155,12 +244,24 @@ export async function listPrivateBonds(
   filter: PrivateBondFilter = {},
 ): Promise<{ relaysReached: string[]; bonds: BondView[]; truncated: boolean }> {
   const { events, relaysReached, truncated } = await fetchInbox(secret, relays);
+  return { relaysReached, truncated, bonds: privateBondViews(events, secret, filter) };
+}
 
+/**
+ * The bond-state views in an already-fetched inbox (see listPrivateBonds), so
+ * a caller that also needs the raw wraps reads the inbox once.
+ */
+export function privateBondViews(events: NostrEvent[], secret: Uint8Array, filter: PrivateBondFilter = {}): BondView[] {
+  return bondViewsFromRumors(selectBondRumors(events, secret), filter);
+}
+
+/** As privateBondViews, from rumors already unwrapped (so one inbox is unwrapped once). */
+export function bondViewsFromRumors(rumors: PrivateBondRumor[], filter: PrivateBondFilter = {}): BondView[] {
   const authorHex = filter.author ? pubkeyHexFromIdentity(filter.author) : null;
   const counterpartyHex = filter.counterparty ? pubkeyHexFromIdentity(filter.counterparty) : null;
 
   const views: BondView[] = [];
-  for (const rumor of selectBondRumors(events, secret)) {
+  for (const rumor of rumors) {
     // State views come from kind:30317 rumors only; kind:1317 lifecycle rumors
     // (reaffirmations etc.) are resolved separately by listReaffirmations.
     if (rumor.rumor.kind !== KIND_BOND_STATE) continue;
@@ -172,6 +273,5 @@ export async function listPrivateBonds(
 
   // kind:1059 is a regular kind, so perform the replaceable reduction the relay
   // does for public kind:30317: latest per (author, bond).
-  const bonds = latestPerKey(views, (v) => `${v.author}:${v.bond ?? v.id}`).sort((a, b) => b.created_at - a.created_at);
-  return { relaysReached, truncated, bonds };
+  return latestPerKey(views, (v) => `${v.author}:${v.bond ?? v.id}`).sort((a, b) => b.created_at - a.created_at);
 }

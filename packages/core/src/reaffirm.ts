@@ -21,7 +21,7 @@ import {
 import { makeBondDocument } from './bond.js';
 import { PactError } from './errors.js';
 import { listBonds, verifyBond, type BondView, type BondVisibility } from './index.js';
-import { fetchInbox, listPrivateBonds } from './private.js';
+import { bondViewsFromRumors, fetchInbox } from './private.js';
 
 export const REAFFIRM_TYPE = 'bond.reaffirmed';
 
@@ -66,6 +66,14 @@ export async function reaffirmBond(secret: Uint8Array, input: ReaffirmBondInput)
       secret,
       parties: counterparty ? [counterparty] : [],
     });
+    if (verdict.inboxTruncated) {
+      // A flooded inbox can hide this identity's own private bond (or its
+      // revocation), so the lookup cannot decide the counterparty or channel.
+      throw new PactError(
+        'conflict',
+        `inbox incomplete on these relays — could not read the full private history for bond ${input.bondId}; nothing reaffirmed. Pass both counterparty and visibility to reaffirm without the lookup`,
+      );
+    }
     if (!verdict.mutual || !verdict.parties?.includes(selfHex)) {
       throw new PactError(
         'not_found',
@@ -130,16 +138,19 @@ export interface ReaffirmationView {
 export async function listReaffirmations(
   secret: Uint8Array,
   relays: string[] = DEFAULT_RELAYS,
-): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[] }> {
+): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[]; truncated?: boolean }> {
   const selfHex = keypairFromSecret(secret).pubkeyHex;
 
-  const [mine, toward, wraps, ownSides, privSides] = await Promise.all([
+  const [mine, toward, wraps, ownSides] = await Promise.all([
     resolveEvents(relays, { kinds: [KIND_BOND_HISTORY], '#t': [REAFFIRM_TYPE], authors: [selfHex], limit: 200 }),
     resolveEvents(relays, { kinds: [KIND_BOND_HISTORY], '#t': [REAFFIRM_TYPE], '#p': [selfHex], limit: 200 }),
     fetchInbox(secret, relays),
     listBonds({ authors: [selfHex] }, relays),
-    listPrivateBonds(secret, relays),
   ]);
+  // One inbox read, unwrapped once: private bond sides and private
+  // reaffirmations both come from it.
+  const rumors = selectBondRumors(wraps.events, secret);
+  const privSides = { bonds: bondViewsFromRumors(rumors) };
 
   // This identity's bonds, from its own sides: bond id → the counterparties it
   // named. A reaffirmation counts only from self or from one of those.
@@ -175,7 +186,7 @@ export async function listReaffirmations(
     if (!verifyEvent(event)) continue;
     fold(tag(event.tags, 'd'), event.pubkey, event.created_at, 'public');
   }
-  for (const rumor of selectBondRumors(wraps.events, secret)) {
+  for (const rumor of rumors) {
     if (rumor.rumor.kind !== KIND_BOND_HISTORY) continue;
     if (tag(rumor.rumor.tags, 't', 'mate-bond') !== REAFFIRM_TYPE) continue;
     fold(rumor.bond, rumor.author, rumor.rumor.created_at, 'private');
@@ -184,5 +195,8 @@ export async function listReaffirmations(
   return {
     relaysReached: [...new Set([...mine.relaysReached, ...toward.relaysReached, ...wraps.relaysReached])],
     reaffirmations: [...latest.values()].sort((a, b) => b.at - a.at),
+    // The inbox could not be read to the end: private reaffirmations (and the
+    // private bonds they count against) may be missing from the list.
+    ...(wraps.truncated ? { truncated: true } : {}),
   };
 }

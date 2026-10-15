@@ -14,7 +14,8 @@ Identity, canonicalization, bond signing, and transport come from the L1 protoco
 - `makeBondDocument()` — assemble a bond document
 - `formBond(secret, { counterparty, bondId, state, kind, relays, history })` — assemble + sign + publish
 - `listBonds(filter, relays)` — resolve + verify bonds from relays (latest per author + bond id)
-- `verifyBond(bondId, relays, { secret?, parties? })` — the mutual verdict (`findMutualPair`: two parties whose latest valid sides name each other, both still consenting, at least one accepted)
-- `acceptBond`, `reaffirmBond`, `listReaffirmations`, `listPrivateBonds`, `publishIntent` / `discover`
+- `verifyBond(bondId, relays, { secret?, parties? })` — the mutual verdict (`findMutualPair`: two parties whose latest valid sides name each other, both still consenting, at least one accepted). With `secret`, `inboxTruncated: true` reports a private inbox that could not be read to the end (a flood, a relay that stopped answering mid-read); `mutual` is then forced false only for a bond the secret's key is a party to
+- `acceptBond(secret, { bondId, …, allowIncompleteInbox? })` — refuses (`PactError` `conflict`, "inbox incomplete") on a partially-read private inbox; `allowIncompleteInbox: true` is the deliberate operator override that accepts on the partial history
+- `reaffirmBond` (conflict "inbox incomplete" when its lookup reads a partial inbox — pass both `counterparty` and `visibility` to skip the lookup), `listReaffirmations` (`truncated` on a partial inbox), `listPrivateBonds` / `fetchInbox` (`truncated`), `publishIntent` / `discover`
 - `BOND_STATES` / `isBondState` — the legal states every surface validates against
 - low-level: `buildBondStateEvent`, `verifyEvent`, `publishEvent`, `resolveEvents`

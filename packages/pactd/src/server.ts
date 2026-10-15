@@ -462,6 +462,9 @@ export function createDaemon(options: DaemonOptions = {}) {
           relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
           history: body.history === undefined ? true : Boolean(body.history),
           visibility: acceptVisibility,
+          // Deliberate operator override: accept on a partially-read private
+          // inbox (core otherwise refuses with 409 "inbox incomplete").
+          allowIncompleteInbox: body.allowIncompleteInbox === true,
         });
         return json(res, 200, await withDiscovery(result, loadSecret()));
       }
@@ -560,11 +563,14 @@ export function createDaemon(options: DaemonOptions = {}) {
                 author: author ?? undefined,
                 counterparty: counterparty ?? undefined,
               })
-            : { relaysReached: [] as string[], bonds: [] };
+            : { relaysReached: [] as string[], bonds: [], truncated: false };
 
         return json(res, 200, {
           relaysReached: [...new Set([...pub.relaysReached, ...priv.relaysReached])],
           bonds: [...pub.bonds, ...priv.bonds].sort((a, b) => b.created_at - a.created_at),
+          // The private inbox could not be read to the end: private sides
+          // (or their latest state) may be missing from `bonds`.
+          ...(priv.truncated ? { inboxTruncated: true } : {}),
         });
       }
       if (path === '/bonds/verify' && method === 'GET') {
@@ -811,6 +817,11 @@ function startEventStream(req: IncomingMessage, res: ServerResponse, url: URL): 
         listBonds({ '#p': [self] }, relays),
         listPrivateBonds(loadSecret(), relays, { counterparty: self }),
       ]);
+      if (priv.truncated) {
+        // Once per poll: the private inbox was only partly read, so a private
+        // change (a withdrawal, say) may be missing from this poll's events.
+        res.write(`event: warning\ndata: ${JSON.stringify({ warning: 'inbox incomplete', inboxTruncated: true })}\n\n`);
+      }
       for (const b of [...pub.bonds, ...priv.bonds]) {
         const key = `${b.bond}:${b.author}:${b.visibility}`;
         if (seen.get(key) !== (b.state ?? '')) {

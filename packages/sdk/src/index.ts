@@ -82,6 +82,8 @@ export interface ListBondsArgs {
 export interface BondQueryResult {
   relaysReached: string[];
   bonds: BondView[];
+  /** The private inbox could not be read to the end: private sides may be missing. */
+  inboxTruncated?: boolean;
 }
 
 /**
@@ -174,7 +176,7 @@ export class Pact {
         : await coreListBonds(filter, relays);
     const priv =
       visibility === 'public'
-        ? { relaysReached: [] as string[], bonds: [] as BondView[] }
+        ? { relaysReached: [] as string[], bonds: [] as BondView[], truncated: false }
         : await coreListPrivateBonds(this.secret, relays, {
             bondId: args.bondId,
             author: args.author,
@@ -184,6 +186,7 @@ export class Pact {
     return {
       relaysReached: [...new Set([...pub.relaysReached, ...priv.relaysReached])],
       bonds: [...pub.bonds, ...priv.bonds].sort((a, b) => b.created_at - a.created_at),
+      ...(priv.truncated ? { inboxTruncated: true } : {}),
     };
   }
 
@@ -222,6 +225,8 @@ export class Pact {
       history?: boolean;
       relays?: string[];
       visibility?: BondVisibility;
+      /** Deliberate operator override: accept on a partially-read private inbox (see core AcceptBondInput). */
+      allowIncompleteInbox?: boolean;
     } = {},
   ): Promise<FormBondResult> {
     return coreAcceptBond(this.secret, {
@@ -232,6 +237,7 @@ export class Pact {
       history: opts.history,
       relays: opts.relays ?? this.relays,
       visibility: opts.visibility,
+      allowIncompleteInbox: opts.allowIncompleteInbox,
     });
   }
 
@@ -254,7 +260,9 @@ export class Pact {
   }
 
   /** Reaffirmations visible to this identity, latest-per-(bond, author). */
-  listReaffirmations(relays?: string[]): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[] }> {
+  listReaffirmations(
+    relays?: string[],
+  ): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[]; truncated?: boolean }> {
     return coreListReaffirmations(this.secret, relays ?? this.relays);
   }
 

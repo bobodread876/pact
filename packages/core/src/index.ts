@@ -124,6 +124,8 @@ export interface FormBondResult {
 /** Last created_at this process stamped per (author, bond), on either channel. */
 const lastStamp = new Map<string, number>();
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** Assemble, sign, and publish a bond state (and optional history) from a secret key. */
 export async function formBond(secret: Uint8Array, input: FormBondInput): Promise<FormBondResult> {
   const subjectDid = keypairFromSecret(secret).did;
@@ -134,20 +136,29 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
     kind: input.kind,
   });
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
-  let createdAt = Math.floor(Date.now() / 1000);
+  const startedMs = Date.now();
 
   // Relays keep the newest side per (author, d) and readers break a same-second
   // tie by lowest id, so a quick follow-up (propose → withdraw) could lose the
   // tie to the side it is meant to replace. Stamp strictly after this author's
-  // current side. The same-second case is one process writing twice, so a
-  // process-local stamp per (author, bond) covers it on both channels without
-  // reading the (public-write, floodable) inbox on every write. The public
-  // prior is one cheap addressable query; the inbox is read only for a
-  // private write whose bond this process has not stamped yet (e.g. after a
-  // restart), so a flooded inbox can't slow down public writes at all.
+  // current side, on both channels:
+  // - Within one process, a stamp per (author, bond) orders every write.
+  // - Across processes (every `pact` CLI command is one; CLI and pactd may
+  //   share a key), the first write this process makes for a bond waits for
+  //   the wall clock to leave the second the call started in. Anything written
+  //   before this process existed is then in an earlier second, with no inbox
+  //   read. Costs at most a second, once per (author, bond) per process.
+  // - The public prior is one cheap addressable query (it also catches a
+  //   prior stamped ahead of the clock); the inbox is read only for a private
+  //   write whose bond this process has not stamped yet, so a flooded inbox
+  //   can't slow down public writes at all.
   const selfHex = keypairFromSecret(secret).pubkeyHex;
   const stampKey = `${selfHex}:${bondId}`;
-  const publicPrior = await listBonds({ authors: [selfHex], '#d': [bondId], limit: 5 }, relays).catch(() => null);
+  const firstStamp = !lastStamp.has(stampKey);
+  const [publicPrior] = await Promise.all([
+    listBonds({ authors: [selfHex], '#d': [bondId], limit: 5 }, relays).catch(() => null),
+    firstStamp ? sleep(Math.max(0, (Math.floor(startedMs / 1000) + 1) * 1000 - Date.now())) : null,
+  ]);
   let priorAt = Math.max(
     lastStamp.get(stampKey) ?? 0,
     ...(publicPrior?.bonds ?? []).filter((b) => b.author === selfHex).map((b) => b.created_at),
@@ -156,6 +167,9 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
     const privatePrior = await listPrivateBonds(secret, relays, { bondId, author: selfHex }).catch(() => null);
     priorAt = Math.max(priorAt, ...(privatePrior?.bonds ?? []).map((b) => b.created_at));
   }
+  // Read the clock only now: after the first-stamp wait (and any inbox read).
+  let createdAt = Math.floor(Date.now() / 1000);
+  if (firstStamp) createdAt = Math.max(createdAt, Math.floor(startedMs / 1000) + 1);
   if (priorAt >= createdAt) createdAt = priorAt + 1;
   lastStamp.set(stampKey, createdAt);
   if (lastStamp.size > 10_000) lastStamp.delete(lastStamp.keys().next().value as string);
@@ -277,8 +291,12 @@ export interface VerifyBondResult {
   private?: boolean;
   /**
    * True when this node's private inbox could not be read to the end (a
-   * flooded second or the page budget), so private sides may be missing.
-   * `mutual` is forced false then: a hidden revocation must not verify.
+   * flooded second, a relay that stopped answering mid-read, or the page
+   * budget), so private sides may be missing. When this node is one of the
+   * pair's parties, `mutual` is forced false then: its counterparty's private
+   * revocation would be wrapped to it and could be hiding in what was not
+   * read. A non-party's inbox never holds either side's private state, so its
+   * verdict on someone else's bond is unaffected (the flag is still reported).
    */
   inboxTruncated?: boolean;
   /** Every side seen (latest per author + channel), including ones that did not count. */
@@ -358,6 +376,7 @@ export async function verifyBond(
   }
 
   let inboxTruncated = false;
+  const selfHex = options.secret ? keypairFromSecret(options.secret).pubkeyHex : null;
   if (options.secret) {
     const priv = await listPrivateBonds(options.secret, relays, { bondId });
     sides = [...sides, ...priv.bonds];
@@ -381,8 +400,10 @@ export async function verifyBond(
     bondId,
     relaysReached: [...reached],
     count: bonds.length,
-    // An incomplete inbox can hide a revocation: never report mutual on one.
-    mutual: pair !== null && !inboxTruncated,
+    // An incomplete inbox can hide a revocation wrapped to this node — which
+    // only happens for a bond this node is a party to. Never report such a
+    // bond mutual on a partial read; anyone else's bond is unaffected.
+    mutual: pair !== null && !(inboxTruncated && selfHex !== null && pair.parties.includes(selfHex)),
     ...(inboxTruncated ? { inboxTruncated: true } : {}),
     ...(pair ? { parties: pair.parties } : {}),
     ...(anyPrivate ? { private: true } : {}),
@@ -412,6 +433,14 @@ export interface AcceptBondInput {
    * §13.7 consensual go-public transition).
    */
   visibility?: BondVisibility;
+  /**
+   * Deliberate operator override: accept even though this identity's private
+   * inbox could not be read to the end (a flood of gift wraps, a relay that
+   * stopped answering). The proposal's state is then judged on the partial
+   * history that WAS read — a withdrawal hiding in the unread part would be
+   * missed. Without it, an incomplete inbox refuses the accept (conflict).
+   */
+  allowIncompleteInbox?: boolean;
 }
 
 /**
@@ -439,13 +468,15 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
     bondId: input.bondId,
     counterparty: selfHex,
   });
-  if (truncated) {
-    // Part of the inbox could not be read (a flooded second, or the page
-    // budget). The proposer's current state may be hiding in what was skipped
-    // — a withdrawal, say — so accepting now would act on a partial history.
+  if (truncated && !input.allowIncompleteInbox) {
+    // Part of the inbox could not be read (a flooded second, a relay that
+    // stopped answering, or the page budget). The proposer's current state may
+    // be hiding in what was skipped — a withdrawal, say — so accepting now
+    // would act on a partial history. Junk wraps never expire, so waiting does
+    // not help; the operator decides.
     throw new PactError(
       'conflict',
-      `inbox incomplete on these relays — could not read the full private history for bond ${input.bondId}; nothing accepted. Retry later or against a relay with a smaller inbox`,
+      `inbox incomplete on these relays — could not read the full private history for bond ${input.bondId}; nothing accepted. To accept on the partial history anyway (a hidden withdrawal would be missed), pass allowIncompleteInbox (pactd: "allowIncompleteInbox": true, CLI: --allow-incomplete-inbox)`,
     );
   }
   const inbound = [...publicBonds, ...privateBonds].filter((b) => b.author !== selfHex && b.signature_valid);

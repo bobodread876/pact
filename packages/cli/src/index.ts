@@ -19,8 +19,12 @@ Usage:
                                      Propose a bond. Omit bondId to auto-generate urn:mate:<uuid>.
                                      --private: NIP-59 gift wrap — off the public graph, parties-only.
   pact bond accept <bondId> [--from <counterparty>] [--state active] [--private|--public]
+                   [--allow-incomplete-inbox]
                                      Accept a proposed bond (echoes its id; proposer auto-resolved;
                                      channel echoes the proposal unless --private/--public override).
+                                     --allow-incomplete-inbox: deliberate override — accept even when
+                                     the private inbox could not be fully read (flooded); a
+                                     withdrawal hiding in the unread part would be missed.
   pact bond list [--author <id>] [--counterparty <id>] [--bond-id <id>] [--visibility all|public|private]
   pact bond verify <bondId>          (private sides this key can decrypt are included)
   pact intent <about> --seeking <k1,k2>   Become findable (or: pact intent --closed to unlist)
@@ -42,6 +46,9 @@ function out(json: boolean, human: string, data: unknown): void {
   if (json) console.log(JSON.stringify(data, null, 2));
   else console.log(human);
 }
+
+const INBOX_NOTE =
+  '\n  (inbox incomplete (flooded): the private inbox could not be read to the end — private sides may be missing)';
 
 function bondLine(b: BondView): string {
   const mark = b.signature_valid ? '✓' : '✗';
@@ -72,6 +79,7 @@ async function main(): Promise<void> {
       private: { type: 'boolean' },
       public: { type: 'boolean' },
       visibility: { type: 'string' },
+      'allow-incomplete-inbox': { type: 'boolean' },
     },
   });
 
@@ -191,6 +199,7 @@ async function main(): Promise<void> {
           counterparty: values.from as string | undefined,
           state: values.state as BondState | undefined,
           visibility: values.private ? 'private' : values.public ? 'public' : undefined,
+          allowIncompleteInbox: Boolean(values['allow-incomplete-inbox']),
         });
         const reached = result.stateEvent.relays.filter((r) => r.accepted).length;
         out(
@@ -202,7 +211,7 @@ async function main(): Promise<void> {
       }
 
       if (sub === 'list') {
-        const { relaysReached, bonds } = await pact.listBonds({
+        const { relaysReached, bonds, inboxTruncated } = await pact.listBonds({
           author: values.author as string | undefined,
           counterparty: values.counterparty as string | undefined,
           bondId: values['bond-id'] as string | undefined,
@@ -211,9 +220,9 @@ async function main(): Promise<void> {
         out(
           json,
           bonds.length
-            ? `${bonds.length} bond(s) [${relaysReached.length} relay(s)]:\n${bonds.map(bondLine).join('\n')}`
-            : 'No bonds found.',
-          { relaysReached, bonds },
+            ? `${bonds.length} bond(s) [${relaysReached.length} relay(s)]:\n${bonds.map(bondLine).join('\n')}${inboxTruncated ? INBOX_NOTE : ''}`
+            : `No bonds found.${inboxTruncated ? INBOX_NOTE : ''}`,
+          { relaysReached, bonds, ...(inboxTruncated ? { inboxTruncated } : {}) },
         );
         return;
       }
@@ -248,7 +257,7 @@ async function main(): Promise<void> {
         const result = await pact.verifyBond(bondId);
         out(
           json,
-          `Bond '${bondId}': ${result.mutual ? 'MUTUAL ✓' : 'not mutual'} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).\n${result.bonds.map(bondLine).join('\n')}`,
+          `Bond '${bondId}': ${result.mutual ? 'MUTUAL ✓' : result.inboxTruncated ? 'not mutual: inbox incomplete (flooded)' : 'not mutual'} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).\n${result.bonds.map(bondLine).join('\n')}`,
           result,
         );
         if (!result.mutual) process.exitCode = 1;

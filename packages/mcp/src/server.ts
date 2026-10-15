@@ -99,8 +99,14 @@ export function createServer(): McpServer {
       kind: z.string().optional().describe("Omit to echo the proposal's kind (the default — both sides then describe the same relationship). Set only to deliberately describe it differently; the two documents will disagree on kind."),
       private: z.boolean().optional().describe('Override the channel: true forces a private accept, false forces public. Omit to echo the proposal.'),
       relays: z.array(z.string()).optional().describe('Relay URLs (defaults to the daemon\'s configured relays).'),
+      allow_incomplete_inbox: z
+        .boolean()
+        .optional()
+        .describe(
+          "Deliberate operator override: accept even though this agent's private inbox could not be read to the end (the daemon answered 409 \"inbox incomplete\" — usually a flood of gift wraps). The proposal is then judged on a partial history, so a withdrawal in the unread part would be missed. Set only when the operator explicitly chooses that; never on your own after a 409.",
+        ),
     },
-    async ({ bond_id, counterparty, state, kind, private: priv, relays }) =>
+    async ({ bond_id, counterparty, state, kind, private: priv, relays, allow_incomplete_inbox }) =>
       text(
         await daemon('POST', '/bonds/accept', {
           bondId: bond_id,
@@ -109,6 +115,7 @@ export function createServer(): McpServer {
           ...(kind === undefined ? {} : { kind }),
           relays,
           ...(priv === undefined ? {} : { visibility: priv ? 'private' : 'public' }),
+          ...(allow_incomplete_inbox ? { allowIncompleteInbox: true } : {}),
         }),
       ),
   );

@@ -10,7 +10,8 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { formBond, generateNostrKeypair, keypairFromSecret, newBondId, secretFromNsec } from '../packages/core/src/index.js';
+import { finalizeEvent, formBond, generateNostrKeypair, keypairFromSecret, newBondId, publishEvent, secretFromNsec } from '../packages/core/src/index.js';
+import { Pact } from '../packages/sdk/src/index.js';
 import type { LightningProvider } from '../packages/pactd/src/lightning.js';
 import { startMockRelay, type MockRelay } from './mock-relay.js';
 
@@ -407,4 +408,75 @@ describe('a price without a wallet is not a market', () => {
       rmSync(subHome, { recursive: true, force: true });
     }
   });
+});
+
+describe('a flooded private inbox is surfaced, not silently dropped', () => {
+  it('/bonds and the SDK report inboxTruncated, accept is 409 until the operator override, verify + reaffirmations + /events say so', async () => {
+    const r = await startMockRelay();
+    const floodHome = mkdtempSync(join(tmpdir(), 'pact-flood-'));
+    const d = await startDaemon({ PACT_HOME: floodHome, PACT_RELAYS: r.url, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: undefined, PACT_ALLOWED_HOSTS: undefined });
+    try {
+      const id = (await (await call(d.base, 'POST', '/identity', { body: {}, auth: true })).json()) as { pubkeyHex: string; npub: string };
+      const alice = secretFromNsec(generateNostrKeypair().nsec);
+      const bondId = newBondId();
+      await formBond(alice, { counterparty: id.npub, bondId, state: 'proposed', visibility: 'private', relays: [r.url] });
+      // 201 junk gift wraps to the daemon's key (and to an SDK user's), all in one second.
+      const carol = secretFromNsec(generateNostrKeypair().nsec);
+      const t = Math.floor(Date.now() / 1000) + 60;
+      for (const to of [id.pubkeyHex, keypairFromSecret(carol).pubkeyHex]) {
+        for (let i = 0; i < 201; i++) {
+          const k = secretFromNsec(generateNostrKeypair().nsec);
+          await publishEvent([r.url], finalizeEvent({ pubkey: keypairFromSecret(k).pubkeyHex, created_at: t, kind: 1059, tags: [['p', to]], content: 'x' }, k));
+        }
+      }
+
+      const list = (await (await call(d.base, 'GET', '/bonds?visibility=private', { auth: true })).json()) as { inboxTruncated?: boolean };
+      expect(list.inboxTruncated).toBe(true);
+      const all = (await (await call(d.base, 'GET', '/bonds', { auth: true })).json()) as { inboxTruncated?: boolean };
+      expect(all.inboxTruncated).toBe(true);
+      const pub = (await (await call(d.base, 'GET', '/bonds?visibility=public', { auth: true })).json()) as { inboxTruncated?: boolean };
+      expect(pub.inboxTruncated).toBeUndefined();
+
+      const refused = await call(d.base, 'POST', '/bonds/accept', { body: { bondId }, auth: true });
+      expect(refused.status).toBe(409);
+      const err = (await refused.json()) as { error: string };
+      expect(err.error).toMatch(/inbox incomplete/);
+      expect(err.error).toMatch(/allowIncompleteInbox/);
+      expect(err.error).not.toMatch(/retry later/i);
+
+      const forced = await call(d.base, 'POST', '/bonds/accept', { body: { bondId, allowIncompleteInbox: true }, auth: true });
+      expect(forced.status).toBe(200);
+      expect(((await forced.json()) as { visibility: string }).visibility).toBe('private');
+
+      // The node is a party with a partial inbox: not mutual, and it says why.
+      const v = (await (await call(d.base, 'GET', `/bonds/verify?bond_id=${encodeURIComponent(bondId)}`, { auth: true })).json()) as { mutual: boolean; inboxTruncated?: boolean };
+      expect(v.inboxTruncated).toBe(true);
+      expect(v.mutual).toBe(false);
+
+      const re = (await (await call(d.base, 'GET', '/reaffirmations', { auth: true })).json()) as { truncated?: boolean };
+      expect(re.truncated).toBe(true);
+
+      // Same flag through the SDK, for an embedding app holding its own key.
+      expect((await Pact.fromSecret(carol, { relays: [r.url] }).listBonds({ visibility: 'private' })).inboxTruncated).toBe(true);
+      expect((await Pact.fromSecret(alice, { relays: [r.url] }).listBonds({ visibility: 'private' })).inboxTruncated).toBeUndefined();
+
+      const ctrl = new AbortController();
+      const res = await fetch(`${d.base}/events`, { headers: { authorization: `Bearer ${TOKEN}` }, signal: ctrl.signal });
+      const reader = res.body!.getReader();
+      let text = '';
+      while (!text.includes('event: warning')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += new TextDecoder().decode(value);
+      }
+      ctrl.abort();
+      expect(text).toContain('event: warning');
+      expect(text).toContain('inbox incomplete');
+      expect(text.split('event: warning').length - 1).toBe(1); // once per poll
+    } finally {
+      await d.close();
+      await r.close();
+      rmSync(floodHome, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

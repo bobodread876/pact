@@ -51,6 +51,18 @@ export interface MockRelay {
   reqCount(): number;
   /** When true, every EVENT is answered OK=false and not stored (a relay that rejects writes). */
   setRejectEvents(reject: boolean): void;
+  /**
+   * Serve the next `served` REQs normally, then misbehave on every later one:
+   * 'closed' answers ["CLOSED", sub, "rate-limited: …"] with no events and no
+   * EOSE (a rate-limiting relay); 'drop' sends the matching events and then
+   * kills the socket without EOSE (a relay that dies mid-page). With `kind`,
+   * only REQs whose filter asks for that kind count and misbehave (so a test
+   * can target inbox paging without stalling unrelated lookups). `null` resets.
+   */
+  failReqsAfter(served: number, mode: 'closed' | 'drop', kind?: number): void;
+  failReqsAfter(reset: null): void;
+  /** Cap every REQ's `limit` at `max` (relays commonly serve fewer than asked). `null` removes the cap. */
+  setMaxLimit(max: number | null): void;
   close(): Promise<void>;
 }
 
@@ -58,6 +70,8 @@ export function startMockRelay(): Promise<MockRelay> {
   const events: StoredEvent[] = [];
   let reqs = 0;
   let rejectEvents = false;
+  let failAfter: { remaining: number; mode: 'closed' | 'drop'; kind?: number } | null = null;
+  let maxLimit: number | null = null;
   const wss = new WebSocketServer({ port: 0 });
 
   wss.on('connection', (ws) => {
@@ -101,12 +115,26 @@ export function startMockRelay(): Promise<MockRelay> {
         reqs += 1;
         const subId = msg[1];
         const filter = (msg[2] ?? {}) as Filter;
+        let misbehave: 'closed' | 'drop' | null = null;
+        if (failAfter && (failAfter.kind === undefined || filter.kinds?.includes(failAfter.kind))) {
+          if (failAfter.remaining > 0) failAfter.remaining -= 1;
+          else misbehave = failAfter.mode;
+        }
+        if (misbehave === 'closed') {
+          ws.send(JSON.stringify(['CLOSED', subId, 'rate-limited: slow down']));
+          return;
+        }
+        const limit = Math.min(filter.limit ?? 500, maxLimit ?? Infinity);
         const matched = events
           .filter((e) => matches(e, filter))
           .sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-          .slice(0, filter.limit ?? 500);
+          .slice(0, limit);
         for (const event of matched) {
           ws.send(JSON.stringify(['EVENT', subId, event]));
+        }
+        if (misbehave === 'drop') {
+          ws.terminate();
+          return;
         }
         ws.send(JSON.stringify(['EOSE', subId]));
       }
@@ -122,6 +150,12 @@ export function startMockRelay(): Promise<MockRelay> {
         reqCount: () => reqs,
         setRejectEvents: (reject: boolean) => {
           rejectEvents = reject;
+        },
+        failReqsAfter: ((served: number | null, mode?: 'closed' | 'drop', kind?: number) => {
+          failAfter = served === null ? null : { remaining: served, mode: mode ?? 'closed', kind };
+        }) as MockRelay['failReqsAfter'],
+        setMaxLimit: (max: number | null) => {
+          maxLimit = max;
         },
         close: () =>
           new Promise<void>((done) => {
