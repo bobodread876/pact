@@ -57,8 +57,11 @@ function ensureSecretDir(dir: string): void {
  * an attacker-chosen target), O_NOFOLLOW re-checks at open where available,
  * and the fchmod tightens a pre-existing loose file — O_CREAT's mode only
  * applies at creation, so without it a planted 0644 file stays world-readable.
+ *
+ * Exported so pactd's persisted secrets (API token, NWC URI) get the same
+ * guarantees without re-implementing them.
  */
-function writeSecretFile(path: string, contents: string): void {
+export function writeSecretFile(path: string, contents: string): void {
   ensureSecretDir(dirname(path));
   const stats = lstatSync(path, { throwIfNoEntry: false });
   if (stats && (stats.isSymbolicLink() || !stats.isFile())) {

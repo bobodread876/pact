@@ -2,10 +2,10 @@
 // the wallet can be connected via the status UI (no env/compose editing needed),
 // surviving restarts. Falls back to the PACT_NWC env var.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { pactHome } from 'pact-core';
+import { pactHome, writeSecretFile } from 'pact-core';
 
 function configPath(): string {
   return join(pactHome(), 'wallet.json');
@@ -24,13 +24,12 @@ export function loadNwcUri(): string | undefined {
 }
 
 export function saveNwcUri(nwc: string): void {
-  mkdirSync(pactHome(), { recursive: true });
-  writeFileSync(configPath(), JSON.stringify({ nwc }), { mode: 0o600 });
+  writeSecretFile(configPath(), JSON.stringify({ nwc }));
 }
 
 export function clearNwcUri(): void {
   try {
-    writeFileSync(configPath(), JSON.stringify({}), { mode: 0o600 });
+    writeSecretFile(configPath(), JSON.stringify({}));
   } catch {
     // ignore
   }
