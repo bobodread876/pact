@@ -2,11 +2,32 @@
 // created, payments it made). Used to scope /wallet/transactions to Pact's own
 // activity, so the agent never sees unrelated transactions from other apps
 // sharing the same NWC wallet/node. Sovereign: local-only, in PACT_HOME.
+//
+// Atomicity: every write goes to a tmp file that is rename()d into place, so a
+// crash mid-write never corrupts the ledger. Fail-CLOSED: a failed write
+// propagates to the caller — a ledger that cannot persist must not pretend the
+// money moved.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { pactHome } from 'pact-core';
+
+function atomicWriteJson(path: string, value: unknown): void {
+  mkdirSync(pactHome(), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
+    renameSync(tmp, path);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // the tmp file may never have been created
+    }
+    throw error;
+  }
+}
 
 function ledgerPath(): string {
   return join(pactHome(), 'payments.json');
@@ -26,18 +47,13 @@ function load(): Set<string> {
   return cache;
 }
 
-/** Record a payment hash that this Pact node originated. */
+/** Record a payment hash that this Pact node originated. Throws if the write fails. */
 export function recordPaymentHash(hash: string | undefined | null): void {
   if (!hash) return;
   const set = load();
   if (set.has(hash)) return;
   set.add(hash);
-  try {
-    mkdirSync(pactHome(), { recursive: true });
-    writeFileSync(ledgerPath(), JSON.stringify([...set]), { mode: 0o600 });
-  } catch {
-    // best effort; scoping degrades gracefully
-  }
+  atomicWriteJson(ledgerPath(), [...set]);
 }
 
 /** Whether this Pact node originated the given payment hash. */
@@ -59,6 +75,8 @@ interface VerificationInvoice {
   issuedAt?: number;
   /** Client address the invoice was issued to (per-client pending cap). Absent on older entries. */
   client?: string;
+  /** The bolt11 string, stored so a re-ask for the same bond reuses this invoice. */
+  invoice?: string;
 }
 
 /** Expiry requested for verification invoices (seconds). */
@@ -96,10 +114,7 @@ function loadVerifications(): Map<string, VerificationInvoice> {
  */
 function persistVerifications(map: Map<string, VerificationInvoice>): void {
   pruneVerifications(map, Date.now());
-  mkdirSync(pactHome(), { recursive: true });
-  const tmp = `${verificationsPath()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
-  renameSync(tmp, verificationsPath());
+  atomicWriteJson(verificationsPath(), Object.fromEntries(map));
 }
 
 /**
@@ -148,6 +163,21 @@ export function recordVerificationInvoice(hash: string, bondId: string, now = Da
     map.delete(hash);
     throw error;
   }
+}
+
+/** The live (unspent) invoice previously issued for this bond, for reuse in 402 answers. */
+export function pendingVerificationForBond(bondId: string): { hash: string; invoice?: string } | null {
+  for (const [hash, v] of loadVerifications()) {
+    if (v.bondId === bondId && !v.consumed) return { hash, invoice: v.invoice };
+  }
+  return null;
+}
+
+/** How many issued verification invoices remain outstanding (unredeemed). */
+export function countPendingVerifications(): number {
+  let n = 0;
+  for (const v of loadVerifications().values()) if (!v.consumed) n++;
+  return n;
 }
 
 export type VerificationStatus = 'ok' | 'unknown' | 'wrong_bond' | 'spent';
