@@ -3,7 +3,7 @@
 // unit tests prove the replay hole (any settled invoice → unlimited verifies)
 // is closed, without standing up a wallet.
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -67,5 +67,81 @@ describe('verification invoice ledger (paywall)', () => {
       ledger.consumeVerification('hashA', 'urn:mate:1'),
     ];
     expect(results.filter(Boolean)).toHaveLength(1);
+  });
+});
+
+describe('fail-closed persistence (write errors must not silently succeed)', () => {
+  // The ledger directory (not the file) goes read-only: atomic tmp+rename
+  // persistence can then neither create its tmp file nor rename — so writes
+  // must throw and in-memory state must NOT drift ahead of the disk.
+  it('consumeVerification throws when the persist fails, and the redemption stays live', () => {
+    ledger.recordVerificationInvoice('hashA', 'urn:mate:1');
+    chmodSync(dir, 0o555);
+    try {
+      expect(() => ledger.consumeVerification('hashA', 'urn:mate:1')).toThrow();
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    // flag reverted in memory — the redemption never happened
+    expect(ledger.verificationStatus('hashA', 'urn:mate:1')).toBe('ok');
+    expect(ledger.consumeVerification('hashA', 'urn:mate:1')).toBe(true);
+  });
+
+  it('a failed consume leaves the on-disk record untouched and drops no tmp litter', () => {
+    ledger.recordVerificationInvoice('hashA', 'urn:mate:1');
+    chmodSync(dir, 0o555);
+    try {
+      expect(() => ledger.consumeVerification('hashA', 'urn:mate:1')).toThrow();
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    const onDisk = JSON.parse(readFileSync(join(dir, 'verifications.json'), 'utf8')) as Record<string, { consumed: boolean }>;
+    expect(onDisk['hashA'].consumed).toBe(false);
+    expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
+  });
+
+  it('recordVerificationInvoice and recordPaymentHash propagate write failures', () => {
+    chmodSync(dir, 0o555);
+    try {
+      expect(() => ledger.recordVerificationInvoice('hashB', 'urn:mate:1')).toThrow();
+      expect(() => ledger.recordPaymentHash('hashB')).toThrow();
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    // and once the dir is writable again, recording works
+    ledger.recordVerificationInvoice('hashB', 'urn:mate:1');
+    expect(ledger.verificationStatus('hashB', 'urn:mate:1')).toBe('ok');
+  });
+
+  it('a failed consume survives a simulated restart as unspent', async () => {
+    ledger.recordVerificationInvoice('hashA', 'urn:mate:1');
+    chmodSync(dir, 0o555);
+    try {
+      expect(() => ledger.consumeVerification('hashA', 'urn:mate:1')).toThrow();
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    vi.resetModules();
+    const reloaded = await import('../packages/pactd/src/ledger.js');
+    // the PoC'd replay window stays CLOSED: no silent in-memory burn
+    expect(reloaded.verificationStatus('hashA', 'urn:mate:1')).toBe('ok');
+  });
+});
+
+describe('pending-invoice queries (issuance cap / per-bond reuse)', () => {
+  it('pendingVerificationForBond returns the live invoice for a bond, not a consumed one', () => {
+    ledger.recordVerificationInvoice('hashA', 'urn:mate:1', 'lnbc1a');
+    expect(ledger.pendingVerificationForBond('urn:mate:1')).toEqual({ hash: 'hashA', invoice: 'lnbc1a' });
+    expect(ledger.consumeVerification('hashA', 'urn:mate:1')).toBe(true);
+    expect(ledger.pendingVerificationForBond('urn:mate:1')).toBeNull();
+    expect(ledger.pendingVerificationForBond('urn:mate:other')).toBeNull();
+  });
+
+  it('countPendingVerifications counts only unconsumed records', () => {
+    ledger.recordVerificationInvoice('hashA', 'urn:mate:1');
+    ledger.recordVerificationInvoice('hashB', 'urn:mate:2');
+    expect(ledger.countPendingVerifications()).toBe(2);
+    expect(ledger.consumeVerification('hashA', 'urn:mate:1')).toBe(true);
+    expect(ledger.countPendingVerifications()).toBe(1);
   });
 });
