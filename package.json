@@ -18,8 +18,10 @@
     "clean": "rm -rf packages/*/dist"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
+    "jsdom": "^30.1.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.8",
     "ws": "^8.21.0"

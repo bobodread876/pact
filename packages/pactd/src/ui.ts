@@ -1,18 +1,24 @@
 // Minimal self-contained status UI served at / by pactd. No build step, no deps:
 // a single HTML page whose JS calls the existing JSON endpoints (same origin).
-// On Umbrel it's reached through app_proxy (Umbrel auth); the optional bearer
-// token (if PACT_TOKEN is set) is injected so the UI's API calls authenticate.
+// Security contract:
+//  - The bearer token is NEVER written into the page. The operator pastes it
+//    into the lock screen once per tab session (sessionStorage only); a 401
+//    clears it and asks again.
+//  - Relay/operator-derived strings are assigned through textContent / DOM
+//    properties only — never interpolated into an HTML string — so a hostile
+//    bond id or pubkey cannot become markup. Handlers are closures bound to
+//    the row object; no data-attribute identity round-trips.
+//  - A CSP meta tag caps exfil channels (default-src 'none').
 
 export function renderUI(
-  token: string | undefined,
+  // Deprecated: the token argument is deliberately unused — the page must not
+  // carry it. Kept in the signature for the existing call site.
+  _token: string | undefined,
   publicPort?: string,
   relayPublicPort?: string,
   publicMode = false,
 ): string {
-  // In public mode the token is NEVER written into the page (the operator enters
-  // it; agents read it from the node config). Otherwise it's injected so the UI's
-  // same-origin API calls authenticate — fine behind a trusted LAN / app login.
-  const tokenLiteral = publicMode ? '""' : JSON.stringify(token ?? '');
+  const publicModeJson = publicMode ? 'true' : 'false';
   const publicPortJson = JSON.stringify(publicPort ?? '');
   const relayPublicPortJson = JSON.stringify(relayPublicPort ?? '');
   return `<!doctype html>
@@ -20,6 +26,7 @@ export function renderUI(
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'" />
 <title>Pact</title>
 <style>
   :root { color-scheme: dark; }
@@ -82,20 +89,39 @@ export function renderUI(
 </div>
 
 <script>
-const PUBLIC_MODE = ${publicMode ? 'true' : 'false'};
-// Public mode: token comes from the operator (cached in sessionStorage), never
-// from the page. Otherwise it's the injected token (empty string in public mode).
-let TOKEN = PUBLIC_MODE ? (sessionStorage.getItem('pact_token') || '') : ${tokenLiteral};
+const PUBLIC_MODE = ${publicModeJson};
+// The token comes only from the operator (cached in sessionStorage), never
+// from the served page.
+let TOKEN = sessionStorage.getItem('pact_token') || '';
 const PUBLIC_PORT = ${publicPortJson};
 const RELAY_PUBLIC_PORT = ${relayPublicPortJson};
+const el = (id) => document.getElementById(id);
+// Builder shortcut: h('span', 'cls', 'text') — text always via textContent.
+const h = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+const kv = (k, valueNode) => {
+  const d = h('div', 'kv');
+  d.appendChild(h('span', 'k', k));
+  d.appendChild(valueNode);
+  return d;
+};
+
 async function api(method, path, body) {
-  const h = { 'content-type': 'application/json' };
-  if (TOKEN) h.authorization = 'Bearer ' + TOKEN;
-  const r = await fetch(path, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
+  const headers = { 'content-type': 'application/json' };
+  if (TOKEN) headers.authorization = 'Bearer ' + TOKEN;
+  const r = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) {
+    const had = !!TOKEN;
+    sessionStorage.removeItem('pact_token'); TOKEN = '';
+    showUnlock(had ? 'That token was rejected — check it and try again.' : null);
+    return { error: 'unauthorized', status: r.status };
+  }
   try { return await r.json(); } catch { return { error: 'bad response', status: r.status }; }
 }
-const el = (id) => document.getElementById(id);
-const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 // --- npub display (bech32 encode, NIP-19) — humans never see hex -------------
 const B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
@@ -111,7 +137,7 @@ function bechPolymod(values) {
 }
 function npubFromHex(hex) {
   if (!/^[0-9a-f]{64}$/i.test(hex || '')) return hex || '?';
-  const bytes = hex.match(/../g).map(h => parseInt(h, 16));
+  const bytes = hex.match(/../g).map(x => parseInt(x, 16));
   const words = [];
   let acc = 0, bits = 0;
   for (const b of bytes) {
@@ -151,21 +177,33 @@ function copyText(text, btn) {
 }
 
 const DATA_CARDS = ['identity-card', 'bonds-card', 'form-card', 'discover-card', 'wallet-card', 'relays-card'];
+let UNLOCK_SHOWN = false;
 function showUnlock(msg) {
   DATA_CARDS.concat('agent-card', 'inbox-card').forEach(c => { el(c).style.display = 'none'; });
   el('unlock-card').style.display = '';
-  el('unlock').innerHTML =
-    '<p class="muted">' + (msg || 'This node runs in public mode — its access token is never shown on this page. Enter it (it lives in your node config) to manage the node:') + '</p>' +
-    '<input id="tok" type="password" placeholder="access token" autocomplete="off" />' +
-    '<div class="row"><button id="unlock-btn">Unlock</button></div>';
-  el('unlock-btn').onclick = () => {
-    const t = el('tok').value.trim();
+  if (UNLOCK_SHOWN) return; // don't wipe a half-typed token on the 20s poll
+  UNLOCK_SHOWN = true;
+  const box = el('unlock');
+  const note = h('p', 'muted', msg ||
+    'This node\\'s access token is never written into this page. Paste it here (it lives in your node config) to manage the node:');
+  const input = h('input');
+  input.id = 'tok';
+  input.type = 'password';
+  input.placeholder = 'access token';
+  input.autocomplete = 'off';
+  const row = h('div', 'row');
+  const btn = h('button', null, 'Unlock');
+  btn.addEventListener('click', () => {
+    const t = input.value.trim();
     if (!t) return;
     sessionStorage.setItem('pact_token', t);
     TOKEN = t;
+    UNLOCK_SHOWN = false;
     el('unlock-card').style.display = 'none';
     refresh();
-  };
+  });
+  row.appendChild(btn);
+  box.replaceChildren(note, input, row);
 }
 
 // --- The bond flow (docs/BOND-FLOW.md) ---------------------------------------
@@ -223,22 +261,48 @@ function ago(unixSeconds) {
 
 function bondRow(g, sit, myHex) {
   const who = (g.mine && g.mine.counterparty) || (g.theirs && g.theirs.author) || '';
-  const lock = g.visibility === 'private' ? ' <span class="lock" title="Private \\u2014 only the two of you can see this bond exists">\\uD83D\\uDD12</span>' : '';
-  const bad = [g.mine, g.theirs].some(s => s && !s.signature_valid) ? ' <span class="warn" title="A side of this bond failed verification">\\u26A0</span>' : '';
-  const kind = g.kind ? ' \\u00B7 ' + esc(g.kind) : '';
-  const buttons = sit.actions.map(a =>
-    '<button class="' + (PRIMARY_ACTIONS[a] ? '' : 'secondary') + '"' + (ACTION_TITLES[a] ? ' title="' + ACTION_TITLES[a] + '"' : '') + ' data-act="' + a + '" data-bond="' + esc(g.id) + '">' + ACTION_LABELS[a] + '</button>').join('');
-  let chosen = '';
+  const row = h('div', 'bond');
+  const left = h('div');
+  const whoSpan = h('span', 'who', shortAddr(who));
+  whoSpan.title = npubFromHex(who);
+  left.appendChild(whoSpan);
+  if (g.visibility === 'private') {
+    const lock = h('span', 'lock', '\\uD83D\\uDD12');
+    lock.title = 'Private \\u2014 only the two of you can see this bond exists';
+    left.appendChild(document.createTextNode(' '));
+    left.appendChild(lock);
+  }
+  if ([g.mine, g.theirs].some(s => s && !s.signature_valid)) {
+    const bad = h('span', 'warn', '\\u26A0');
+    bad.title = 'A side of this bond failed verification';
+    left.appendChild(document.createTextNode(' '));
+    left.appendChild(bad);
+  }
+  const meta = h('div', 'meta');
+  meta.appendChild(h('span', sit.cls, sit.label));
+  if (g.kind) meta.appendChild(document.createTextNode(' \\u00B7 ' + g.kind));
   if (g.reaffirm && (g.reaffirm.mine || g.reaffirm.theirs)) {
     const part = [];
     if (g.reaffirm.mine) part.push('you ' + ago(g.reaffirm.mine));
     if (g.reaffirm.theirs) part.push('them ' + ago(g.reaffirm.theirs));
-    chosen = ' \\u00B7 reaffirmed: ' + part.join(' \\u00B7 ');
+    meta.appendChild(document.createTextNode(' \\u00B7 reaffirmed: ' + part.join(' \\u00B7 ')));
   }
-  return '<div class="bond"><div>' +
-    '<span class="who" title="' + esc(npubFromHex(who)) + '">' + esc(shortAddr(who)) + '</span>' + lock + bad +
-    '<div class="meta"><span class="' + sit.cls + '">' + sit.label + '</span>' + kind + chosen + '</div></div>' +
-    '<div class="actions">' + buttons + '</div></div>';
+  left.appendChild(meta);
+  const actions = h('div', 'actions');
+  for (const a of sit.actions) {
+    const b = h('button', PRIMARY_ACTIONS[a] ? '' : 'secondary', ACTION_LABELS[a]);
+    if (ACTION_TITLES[a]) b.title = ACTION_TITLES[a];
+    b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = '\\u2026';
+      const res = await bondAction(a, g, myHex);
+      if (res && res.error) alert(res.error);
+      refresh();
+    });
+    actions.appendChild(b);
+  }
+  row.appendChild(left);
+  row.appendChild(actions);
+  return row;
 }
 
 let GROUPS = {};
@@ -246,7 +310,7 @@ let CURRENT_ID = null;
 async function renderBonds(myHex, myNpub) {
   if (!myHex) {
     el('inbox-card').style.display = 'none';
-    el('bonds').innerHTML = '<p class="muted">Create an identity first.</p>';
+    el('bonds').replaceChildren(h('p', 'muted', 'Create an identity first.'));
     renderForm(myHex, myNpub);
     return;
   }
@@ -284,75 +348,105 @@ async function renderBonds(myHex, myNpub) {
     (sit.inbox ? inbox : list).push(bondRow(g, sit, myHex));
   }
   el('inbox-card').style.display = inbox.length ? '' : 'none';
-  el('inbox').innerHTML = inbox.join('');
-  el('bonds').innerHTML = list.length
-    ? list.join('')
-    : '<p class="muted">No bonds yet. Share your bond address, or paste someone\\'s below to propose one.</p>';
-
-  for (const btn of document.querySelectorAll('button[data-act]')) {
-    btn.onclick = async () => {
-      btn.disabled = true; btn.textContent = '\\u2026';
-      const g = GROUPS[btn.getAttribute('data-bond')];
-      const res = g && await bondAction(btn.getAttribute('data-act'), g, myHex);
-      if (res && res.error) alert(res.error);
-      refresh();
-    };
-  }
+  el('inbox').replaceChildren(...inbox);
+  el('bonds').replaceChildren(...(list.length ? list : [
+    h('p', 'muted', 'No bonds yet. Share your bond address, or paste someone\\'s below to propose one.'),
+  ]));
   renderForm(myHex, myNpub);
 }
 
 async function renderDiscover(myHex) {
   const box = el('discover');
-  if (!myHex) { box.innerHTML = '<p class="muted">Create an identity first.</p>'; return; }
+  if (!myHex) { box.replaceChildren(h('p', 'muted', 'Create an identity first.')); return; }
   const [mine, board] = await Promise.all([api('GET', '/intent'), api('GET', '/discover')]);
-
   const intent = mine && mine.intent && mine.intent.status === 'open' ? mine.intent : null;
-  let html = intent
-    ? '<p class="muted">You are findable — seeking <b>' + esc((intent.seeking || []).join(', ')) + '</b>' +
-      (intent.about ? ' · \u201C' + esc(intent.about) + '\u201D' : '') + '</p>' +
-      '<div class="row"><button class="secondary" id="intent-close">Unlist me</button></div>'
-    : '<p class="muted">Publish an intent to appear on the open board. It reveals that you exist and what you seek \u2014 never who you bond with.</p>' +
-      '<input id="intent-about" placeholder="a line about this agent (optional)" maxlength="200" />' +
-      '<div style="margin-top:10px"><select id="intent-kind">' +
-        '<option value="companion">seeking: companion</option><option value="collaboration">seeking: collaboration</option>' +
-        '<option value="team">seeking: team</option><option value="guardian">seeking: guardian</option>' +
-      '</select></div>' +
-      '<div class="row"><button id="intent-pub">Become findable</button></div>';
 
-  const rows = ((board && board.candidates) || []).slice(0, 12).map((c) =>
-    '<div class="bond"><div>' +
-      '<span class="who" title="' + esc(npubFromHex(c.author)) + '">' + esc(shortAddr(c.author)) + '</span>' +
-      '<div class="meta">seeks ' + esc((c.seeking || []).join(', ')) +
-        ' \u00B7 ' + c.record.bonds + ' bond' + (c.record.bonds === 1 ? '' : 's') +
-        ' \u00B7 ' + c.record.reaffirmations + ' reaffirmation' + (c.record.reaffirmations === 1 ? '' : 's') +
-        (c.about ? '<br/>\u201C' + esc(c.about) + '\u201D' : '') + '</div></div>' +
-      '<div class="actions"><button data-propose="' + esc(npubFromHex(c.author)) + '">Propose</button></div></div>'
-  );
-  html += '<div style="margin-top:14px">' + (rows.length ? rows.join('') :
-    '<p class="muted">No open intents on your relays yet.</p>') + '</div>';
-  box.innerHTML = html;
+  box.replaceChildren();
+  if (intent) {
+    const p = h('p', 'muted');
+    p.appendChild(document.createTextNode('You are findable \\u2014 seeking '));
+    p.appendChild(h('b', null, (intent.seeking || []).join(', ')));
+    if (intent.about) p.appendChild(document.createTextNode(' \\u00B7 \\u201C' + intent.about + '\\u201D'));
+    box.appendChild(p);
+    const row = h('div', 'row');
+    const closeBtn = h('button', 'secondary', 'Unlist me');
+    closeBtn.addEventListener('click', async () => {
+      closeBtn.disabled = true;
+      await api('POST', '/intent', { status: 'closed' });
+      renderDiscover(myHex);
+    });
+    row.appendChild(closeBtn);
+    box.appendChild(row);
+  } else {
+    box.appendChild(h('p', 'muted',
+      'Publish an intent to appear on the open board. It reveals that you exist and what you seek \\u2014 never who you bond with.'));
+    const about = h('input');
+    about.placeholder = 'a line about this agent (optional)';
+    about.maxLength = 200;
+    box.appendChild(about);
+    const kindWrap = h('div');
+    kindWrap.style.marginTop = '10px';
+    const kind = h('select');
+    for (const k of ['companion', 'collaboration', 'team', 'guardian']) {
+      const opt = h('option', null, 'seeking: ' + k);
+      opt.value = k;
+      kind.appendChild(opt);
+    }
+    kindWrap.appendChild(kind);
+    box.appendChild(kindWrap);
+    const row = h('div', 'row');
+    const pub = h('button', null, 'Become findable');
+    pub.addEventListener('click', async () => {
+      pub.disabled = true;
+      await api('POST', '/intent', { seeking: [kind.value], about: about.value.trim() || undefined });
+      renderDiscover(myHex);
+    });
+    row.appendChild(pub);
+    box.appendChild(row);
+  }
 
-  const pub = el('intent-pub');
-  if (pub) pub.onclick = async () => {
-    pub.disabled = true;
-    await api('POST', '/intent', { seeking: [el('intent-kind').value], about: el('intent-about').value.trim() || undefined });
-    renderDiscover(myHex);
-  };
-  const close = el('intent-close');
-  if (close) close.onclick = async () => { close.disabled = true; await api('POST', '/intent', { status: 'closed' }); renderDiscover(myHex); };
-  for (const b of box.querySelectorAll('button[data-propose]')) {
-    b.onclick = () => {
-      const addr = b.getAttribute('data-propose');
+  const listWrap = h('div');
+  listWrap.style.marginTop = '14px';
+  const candidates = ((board && board.candidates) || []).slice(0, 12);
+  if (!candidates.length) {
+    listWrap.appendChild(h('p', 'muted', 'No open intents on your relays yet.'));
+  }
+  for (const c of candidates) {
+    const rowEl = h('div', 'bond');
+    const left = h('div');
+    const whoSpan = h('span', 'who', shortAddr(c.author));
+    whoSpan.title = npubFromHex(c.author);
+    left.appendChild(whoSpan);
+    const meta = h('div', 'meta');
+    meta.appendChild(document.createTextNode(
+      'seeks ' + (c.seeking || []).join(', ') +
+      ' \\u00B7 ' + c.record.bonds + ' bond' + (c.record.bonds === 1 ? '' : 's') +
+      ' \\u00B7 ' + c.record.reaffirmations + ' reaffirmation' + (c.record.reaffirmations === 1 ? '' : 's')));
+    if (c.about) {
+      meta.appendChild(h('br'));
+      meta.appendChild(document.createTextNode('\\u201C' + c.about + '\\u201D'));
+    }
+    left.appendChild(meta);
+    const addr = npubFromHex(c.author);
+    const actions = h('div', 'actions');
+    const propose = h('button', null, 'Propose');
+    propose.addEventListener('click', () => {
       const input = el('cp-addr');
       if (input) { input.value = addr; input.scrollIntoView({ behavior: 'smooth', block: 'center' }); input.focus(); }
-    };
+    });
+    actions.appendChild(propose);
+    rowEl.appendChild(left);
+    rowEl.appendChild(actions);
+    listWrap.appendChild(rowEl);
   }
+  box.appendChild(listWrap);
 }
 
 let FORM_VIS = 'private';
 function renderForm(myHex, myNpub) {
-  if (!myHex) { el('formbond').innerHTML = '<p class="muted">Create an identity first.</p>'; return; }
+  if (!myHex) { el('formbond').replaceChildren(h('p', 'muted', 'Create an identity first.')); return; }
   if (el('propose-btn')) return; // keep form state across refreshes
+  // Fully static skeleton (no interpolated values) — safe as a markup string.
   el('formbond').innerHTML =
     '<p class="muted">Paste the other side\\'s bond address (they copy it from their own Pact page):</p>' +
     '<input id="cp-addr" placeholder="npub1\\u2026" autocomplete="off" />' +
@@ -410,40 +504,53 @@ async function refresh() {
   const health = await api('GET', '/healthz');
   el('ver').textContent = 'the agent relationship layer · v' + (health.version || '?');
 
-  if (PUBLIC_MODE && !TOKEN) { showUnlock(); return; }
-
   const id = await api('GET', '/identity');
-  if (PUBLIC_MODE && id && id.error === 'unauthorized') {
-    sessionStorage.removeItem('pact_token'); TOKEN = '';
-    showUnlock('That token was rejected — check it and try again.');
-    return;
-  }
+  if (id && id.error === 'unauthorized') return; // api() already asked for the token
   DATA_CARDS.forEach(c => { el(c).style.display = ''; });
   const myHex = (id && id.pubkeyHex) || '';
   CURRENT_ID = id && id.did ? { hex: myHex, npub: id.npub } : null;
   if (id && id.did) {
-    el('identity').innerHTML =
-      '<p class="muted">Share this with anyone you want to bond with — like a Lightning address, it\\'s public and reusable.</p>' +
-      '<div class="addr"><code>' + esc(id.npub) + '</code><button id="copy-addr">Copy</button></div>';
-    el('copy-addr').onclick = (e) => copyText(id.npub, e.target);
+    const ident = el('identity');
+    ident.replaceChildren(
+      h('p', 'muted', 'Share this with anyone you want to bond with \\u2014 like a Lightning address, it\\'s public and reusable.'));
+    const addr = h('div', 'addr');
+    addr.appendChild(h('code', null, id.npub));
+    const copy = h('button', null, 'Copy');
+    copy.addEventListener('click', () => copyText(id.npub, copy));
+    addr.appendChild(copy);
+    ident.appendChild(addr);
   } else {
-    el('identity').innerHTML = '<p class="muted">No identity yet — this Pact node needs a key to form bonds.</p>' +
-      '<button id="keygen">Create identity</button>';
-    el('keygen').onclick = async () => { await api('POST', '/identity', {}); refresh(); };
+    const ident = el('identity');
+    ident.replaceChildren(
+      h('p', 'muted', 'No identity yet \\u2014 this Pact node needs a key to form bonds.'));
+    const keygen = h('button', null, 'Create identity');
+    keygen.addEventListener('click', async () => { await api('POST', '/identity', {}); refresh(); });
+    ident.appendChild(keygen);
   }
 
   const w = await api('GET', '/wallet');
+  const walletBox = el('wallet');
   if (w && w.connected) {
     const caps = w.capabilities || {};
-    el('wallet').innerHTML =
-      '<div class="kv"><span class="k">status</span><span class="v ok">connected' + (w.info && w.info.alias ? ' · ' + esc(w.info.alias) : '') + '</span></div>' +
-      '<div class="kv"><span class="k">backend</span><span class="v">' + esc(caps.backend || 'unknown') + '</span></div>' +
-      '<div class="kv"><span class="k">spendable (NWC)</span><span class="v">' + (w.balanceSats==null?'—':esc(w.balanceSats)+' sats') + '</span></div>' +
-      '<div style="margin-top:10px">' + (caps.methods||[]).map(m=>'<span class="pill">'+esc(m)+'</span>').join('') + '</div>' +
-      '<div class="row"><button class="secondary" id="disconnect">Disconnect wallet</button></div>';
-    el('disconnect').onclick = async () => { await api('POST', '/wallet/disconnect', {}); refresh(); };
+    walletBox.replaceChildren();
+    const status = h('span', 'v ok', 'connected');
+    if (w.info && w.info.alias) status.appendChild(document.createTextNode(' \\u00B7 ' + w.info.alias));
+    walletBox.appendChild(kv('status', status));
+    walletBox.appendChild(kv('backend', h('span', 'v', caps.backend || 'unknown')));
+    walletBox.appendChild(kv('spendable (NWC)',
+      h('span', 'v', w.balanceSats == null ? '\\u2014' : String(w.balanceSats) + ' sats')));
+    const methods = h('div');
+    methods.style.marginTop = '10px';
+    for (const m of (caps.methods || [])) methods.appendChild(h('span', 'pill', m));
+    walletBox.appendChild(methods);
+    const row = h('div', 'row');
+    const disc = h('button', 'secondary', 'Disconnect wallet');
+    disc.addEventListener('click', async () => { await api('POST', '/wallet/disconnect', {}); refresh(); });
+    row.appendChild(disc);
+    walletBox.appendChild(row);
   } else {
-    el('wallet').innerHTML =
+    // Fully static skeleton (no interpolated values) — safe as a markup string.
+    walletBox.innerHTML =
       '<p class="muted">Connect a Lightning wallet via Nostr Wallet Connect (Alby Hub, Coinos, Primal…). Create an app connection in your wallet and paste its <code>nostr+walletconnect://</code> URI:</p>' +
       '<input id="nwc" placeholder="nostr+walletconnect://..." />' +
       '<div class="row"><button id="connect">Connect wallet</button></div>' +
@@ -463,42 +570,83 @@ async function refresh() {
   const rl = await api('GET', '/relays');
   const relays = (rl && rl.relays) || [];
   const shareUrl = RELAY_PUBLIC_PORT ? ('ws://' + location.hostname + ':' + RELAY_PUBLIC_PORT) : '';
-  el('relays').innerHTML =
-    '<div style="margin-bottom:10px">' + relays.map(r=>'<span class="pill">'+esc(r)+'</span>').join('') +
-      (rl && rl.custom ? '' : ' <span class="badge muted">(defaults)</span>') + '</div>' +
-    (shareUrl
-      ? '<div class="kv"><span class="k">bundled relay (shareable)</span><span class="v">' + esc(shareUrl) + '</span></div>' +
-        '<p class="muted">This node runs its own relay. Other agents on your network can use <code>' + esc(shareUrl) + '</code>; reverse-proxy it (as <code>wss://</code> with TLS) to publish it to the internet. Note: it accepts writes from anyone who can reach it.</p>'
-      : '') +
-    '<p class="muted">Where bonds are published &amp; resolved. Use public relays, the relay bundled with Pact (<code>ws://relay:7777</code> internally), or another relay app on your server. One per line:</p>' +
-    '<textarea id="relay-input" rows="3" placeholder="wss://relay.example.com">' + esc(relays.join('\\n')) + '</textarea>' +
-    '<div class="row"><button id="save-relays">Save relays</button>' +
-      (rl && rl.custom ? '<button class="secondary" id="reset-relays">Use public defaults</button>' : '') + '</div>' +
-    '<div class="badge muted" id="relay-msg" style="margin-top:8px"></div>';
-  el('save-relays').onclick = async () => {
-    const list = el('relay-input').value.split('\\n').map(s=>s.trim()).filter(Boolean);
-    if (!list.length) { el('relay-msg').textContent = 'enter at least one relay URL'; return; }
-    el('relay-msg').textContent = 'Saving…';
+  const relayBox = el('relays');
+  relayBox.replaceChildren();
+  const pills = h('div');
+  pills.style.marginBottom = '10px';
+  for (const r of relays) pills.appendChild(h('span', 'pill', r));
+  if (!(rl && rl.custom)) {
+    pills.appendChild(document.createTextNode(' '));
+    pills.appendChild(h('span', 'badge muted', '(defaults)'));
+  }
+  relayBox.appendChild(pills);
+  if (shareUrl) {
+    relayBox.appendChild(kv('bundled relay (shareable)', h('span', 'v', shareUrl)));
+    const note = h('p', 'muted');
+    note.appendChild(document.createTextNode('This node runs its own relay. Other agents on your network can use '));
+    note.appendChild(h('code', null, shareUrl));
+    note.appendChild(document.createTextNode('; reverse-proxy it (as '));
+    note.appendChild(h('code', null, 'wss://'));
+    note.appendChild(document.createTextNode(' with TLS) to publish it to the internet. Note: it accepts writes from anyone who can reach it.'));
+    relayBox.appendChild(note);
+  }
+  const help = h('p', 'muted');
+  help.appendChild(document.createTextNode('Where bonds are published & resolved. Use public relays, the relay bundled with Pact ('));
+  help.appendChild(h('code', null, 'ws://relay:7777'));
+  help.appendChild(document.createTextNode(' internally), or another relay app on your server. One per line:'));
+  relayBox.appendChild(help);
+  const relayInput = h('textarea');
+  relayInput.rows = 3;
+  relayInput.placeholder = 'wss://relay.example.com';
+  relayInput.value = relays.join('\\n');
+  relayBox.appendChild(relayInput);
+  const relayMsg = h('div', 'badge muted');
+  relayMsg.style.marginTop = '8px';
+  const relayRow = h('div', 'row');
+  const save = h('button', null, 'Save relays');
+  save.addEventListener('click', async () => {
+    const list = relayInput.value.split('\\n').map(s => s.trim()).filter(Boolean);
+    if (!list.length) { relayMsg.textContent = 'enter at least one relay URL'; return; }
+    relayMsg.textContent = 'Saving\\u2026';
     const res = await api('POST', '/relays', { relays: list });
-    if (res && res.relays) refresh(); else el('relay-msg').textContent = (res && res.error) || 'failed to save relays';
-  };
-  const resetBtn = el('reset-relays');
-  if (resetBtn) resetBtn.onclick = async () => { await api('POST', '/relays', { relays: (rl && rl.default) || [] }); refresh(); };
+    if (res && res.relays) refresh(); else relayMsg.textContent = (res && res.error) || 'failed to save relays';
+  });
+  relayRow.appendChild(save);
+  if (rl && rl.custom) {
+    const reset = h('button', 'secondary', 'Use public defaults');
+    reset.addEventListener('click', async () => { await api('POST', '/relays', { relays: (rl && rl.default) || [] }); refresh(); });
+    relayRow.appendChild(reset);
+  }
+  relayBox.appendChild(relayRow);
+  relayBox.appendChild(relayMsg);
 
   if (TOKEN) {
     el('agent-card').style.display = '';
     const origin = PUBLIC_PORT ? (location.protocol + '//' + location.hostname + ':' + PUBLIC_PORT) : location.origin;
+    const agentBox = el('agent');
+    agentBox.replaceChildren();
     if (PUBLIC_MODE) {
-      el('agent').innerHTML =
-        '<p class="muted">Public mode — the access token is not shown on this page. Take it from your node config (the <code>PACT_TOKEN</code> you set, or <code>PACT_HOME/token</code>) and pass it to your agent:</p>' +
-        '<div class="badge muted">claude mcp add pact --env PACT_DAEMON_URL=' + esc(origin) + ' --env PACT_TOKEN=&lt;your-token&gt; -- npx -y pact-mcp</div>' +
-        '<div class="row"><button class="secondary" id="lock-btn">Lock this UI</button></div>';
-      el('lock-btn').onclick = () => { sessionStorage.removeItem('pact_token'); location.reload(); };
+      const p = h('p', 'muted');
+      p.appendChild(document.createTextNode('Public mode \\u2014 the access token is not shown on this page. Take it from your node config (the '));
+      p.appendChild(h('code', null, 'PACT_TOKEN'));
+      p.appendChild(document.createTextNode(' you set, or '));
+      p.appendChild(h('code', null, 'PACT_HOME/token'));
+      p.appendChild(document.createTextNode(') and pass it to your agent:'));
+      agentBox.appendChild(p);
+      agentBox.appendChild(h('div', 'badge muted',
+        'claude mcp add pact --env PACT_DAEMON_URL=' + origin + ' --env PACT_TOKEN=<your-token> -- npx -y pact-mcp'));
+      const row = h('div', 'row');
+      const lock = h('button', 'secondary', 'Lock this UI');
+      lock.addEventListener('click', () => { sessionStorage.removeItem('pact_token'); location.reload(); });
+      row.appendChild(lock);
+      agentBox.appendChild(row);
     } else {
-      el('agent').innerHTML =
-        '<p class="muted">Point an MCP agent (Claude Code) at this node\\'s direct/API URL (bypasses the app login):</p>' +
-        '<div class="kv"><span class="k">access token</span><span class="v">' + esc(TOKEN) + '</span></div>' +
-        '<div class="badge muted" style="margin-top:10px">claude mcp add pact --env PACT_DAEMON_URL=' + esc(origin) + ' --env PACT_TOKEN=' + esc(TOKEN) + ' -- npx -y pact-mcp</div>';
+      agentBox.appendChild(h('p', 'muted', 'Point an MCP agent (Claude Code) at this node\\'s direct/API URL (bypasses the app login):'));
+      agentBox.appendChild(kv('access token', h('span', 'v', TOKEN)));
+      const cmd = h('div', 'badge muted',
+        'claude mcp add pact --env PACT_DAEMON_URL=' + origin + ' --env PACT_TOKEN=' + TOKEN + ' -- npx -y pact-mcp');
+      cmd.style.marginTop = '10px';
+      agentBox.appendChild(cmd);
     }
   }
 }
