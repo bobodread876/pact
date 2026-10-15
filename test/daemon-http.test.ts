@@ -489,7 +489,7 @@ describe('relays that never serve the inbox are named, and a recovery is not a w
     const d = await startDaemon({ PACT_HOME: home2, PACT_RELAYS: `${healthy.url},${auth.url}`, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: undefined, PACT_ALLOWED_HOSTS: undefined });
     const ctrl = new AbortController();
     try {
-      await call(d.base, 'POST', '/identity', { body: {}, auth: true });
+      const me = (await (await call(d.base, 'POST', '/identity', { body: {}, auth: true })).json()) as { pubkeyHex: string };
       auth.failReqsAfter(0, 'closed', 1059); // NIP-42-style: never serves the inbox
 
       const bonds = (await (await call(d.base, 'GET', '/bonds?visibility=all', { auth: true })).json()) as { inboxTruncated?: boolean; inboxRelaysUnread?: string[] };
@@ -530,6 +530,22 @@ describe('relays that never serve the inbox are named, and a recovery is not a w
       await readUntil(() => text.includes('event: info'), 12_000);
       expect(text).toContain('inbox now served by all relays');
       expect(text.split('event: warning').length - 1).toBe(1);
+
+      // B refuses again → one warning naming it (no truncation involved).
+      auth.failReqsAfter(0, 'closed', 1059);
+      await readUntil(() => text.split('event: warning').length - 1 >= 2, 12_000);
+      expect(text.split('event: warning').length - 1).toBe(2);
+      // Now flood A (a truncated read from here on) and let B recover on the
+      // SAME poll: the truncated warning must not swallow the recovery.
+      const t = Math.floor(Date.now() / 1000) + 60;
+      for (let i = 0; i < 201; i++) {
+        const k = secretFromNsec(generateNostrKeypair().nsec);
+        await publishEvent([healthy.url], finalizeEvent({ pubkey: keypairFromSecret(k).pubkeyHex, created_at: t, kind: 1059, tags: [['p', me.pubkeyHex]], content: 'x' }, k));
+      }
+      auth.failReqsAfter(null);
+      await readUntil(() => text.split('event: info').length - 1 >= 2, 12_000);
+      expect(text.split('event: info').length - 1).toBe(2);
+      expect(text).toContain('inbox incomplete');
     } finally {
       ctrl.abort();
       await d.close();

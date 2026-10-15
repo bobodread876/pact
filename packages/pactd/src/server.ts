@@ -834,6 +834,11 @@ function startEventStream(req: IncomingMessage, res: ServerResponse, url: URL): 
             ...(priv.inboxRelaysUnread.length ? { inboxRelaysUnread: priv.inboxRelaysUnread } : {}),
           })}\n\n`,
         );
+        // A recovery that lands on a truncated poll is still a recovery: say
+        // so, or the consumer keeps showing a relay as unread forever.
+        if (unreadChanged && !priv.inboxRelaysUnread.length) {
+          res.write(`event: info\ndata: ${JSON.stringify({ info: 'inbox now served by all relays' })}\n\n`);
+        }
       } else if (unreadChanged && priv.inboxRelaysUnread.length) {
         // The set of relays that never serve the inbox changed: a private side
         // that landed only on one of them is unseen. Said once per change.
