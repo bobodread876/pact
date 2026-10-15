@@ -137,6 +137,20 @@ export async function fetchInbox(
           if (page > 0) truncated = true;
           return;
         }
+        if (!res.eose && page === 0 && res.events.length === 0) {
+          // The relay refused or failed to serve the inbox at all (NIP-42
+          // `auth-required` CLOSED — relay.damus.io does this for every #p
+          // kind:1059 REQ — a rate limit on the first page, a dropped
+          // socket). It contributed nothing, so it cannot have made the
+          // result partial: treat it exactly like an unreachable relay, which
+          // relaysReached reports. Flagging it would mark every inbox read on
+          // the default relay set incomplete and push operators to the
+          // allowIncompleteInbox override as a matter of routine.
+          // TODO(NIP-42): answer the AUTH challenge with a kind:22242 signed by
+          // the inbox key and re-send the REQ; damus then serves the inbox to
+          // its recipient, which is the NIP-17 design.
+          return;
+        }
         reached.add(relay);
         let oldest = Infinity;
         for (const event of res.events) {
@@ -144,7 +158,8 @@ export async function fetchInbox(
           oldest = Math.min(oldest, event.created_at);
         }
         // A page that ended without EOSE (timeout, dropped socket) or with
-        // CLOSED (rate limit) says nothing about what lies below it.
+        // CLOSED (rate limit) after serving part of the history says nothing
+        // about what lies below it.
         if (!res.eose) {
           truncated = true;
           return;

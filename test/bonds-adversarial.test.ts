@@ -354,6 +354,40 @@ describe('listReaffirmations: only the bond\'s parties count', () => {
 });
 
 describe('incomplete inbox reads (round 6)', () => {
+  it('a relay that refuses the inbox outright (CLOSED on page 0, e.g. NIP-42 auth-required) is unreached, not truncation', async () => {
+    // (A socket that DROPS on page 0 may have delivered part of the history
+    // first; that is partial history and stays flagged — covered below.)
+    const mode = 'closed' as const;
+    // relay.damus.io is in DEFAULT_RELAYS and answers every #p kind:1059 REQ
+    // with CLOSED auth-required. If that counted as a truncated inbox, every
+    // accept on the default relay set would be a 409 and every party verify
+    // false — and operators would reach for allowIncompleteInbox routinely.
+    const auth = await startMockRelay();
+    const healthy = await startMockRelay();
+    try {
+      const both = [auth.url, healthy.url];
+      const bondId = newBondId();
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', visibility: 'private', relays: both });
+      auth.failReqsAfter(0, mode, 1059);
+
+      const inbox = await listPrivateBonds(bob, both, { bondId });
+      expect(inbox.truncated).toBe(false);
+      expect(inbox.relaysReached).toEqual([healthy.url]);
+      expect(inbox.bonds.map((x) => x.state)).toEqual(['proposed']);
+
+      auth.failReqsAfter(0, mode, 1059);
+      const accepted = await acceptBond(bob, { bondId, relays: both });
+      expect(accepted.state).toBe('active');
+      auth.failReqsAfter(0, mode, 1059);
+      const v = await verifyBond(bondId, both, { secret: bob });
+      expect(v.mutual).toBe(true);
+      expect(v.inboxTruncated).toBeUndefined();
+    } finally {
+      await auth.close();
+      await healthy.close();
+    }
+  }, 60_000);
+
   const junkWrap = (to: string, createdAt: number) => {
     const k = fresh();
     return finalizeEvent({ pubkey: keypairFromSecret(k).pubkeyHex, created_at: createdAt, kind: 1059, tags: [['p', to]], content: 'x' }, k);

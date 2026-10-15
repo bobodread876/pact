@@ -12,7 +12,7 @@ Identity, canonicalization, bond signing, and transport come from the L1 protoco
 
 - `generateNostrKeypair()` / `keypairFromSecret()` / `secretFromNsec()` — identity
 - `makeBondDocument()` — assemble a bond document
-- `formBond(secret, { counterparty, bondId, state, kind, relays, history })` — assemble + sign + publish
+- `formBond(secret, { counterparty, bondId, state, kind, relays, history })` — assemble + sign + publish. The first write to an existing `bondId` per (author, bond) in a process waits for the wall clock to leave the current second (up to 1 s), so it stamps strictly after anything an earlier process wrote; a bond id the call generates itself skips that wait.
 - `listBonds(filter, relays)` — resolve + verify bonds from relays (latest per author + bond id)
 - `verifyBond(bondId, relays, { secret?, parties? })` — the mutual verdict (`findMutualPair`: two parties whose latest valid sides name each other, both still consenting, at least one accepted). With `secret`, `inboxTruncated: true` reports a private inbox that could not be read to the end (a flood, a relay that stopped answering mid-read); `mutual` is then forced false only for a bond the secret's key is a party to
 - `acceptBond(secret, { bondId, …, allowIncompleteInbox? })` — refuses (`PactError` `conflict`, "inbox incomplete") on a partially-read private inbox; `allowIncompleteInbox: true` is the deliberate operator override that accepts on the partial history
