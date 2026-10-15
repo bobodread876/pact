@@ -1,11 +1,14 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import {
+  BOND_STATES,
   DEFAULT_RELAYS,
+  PactError,
   acceptBond,
   ensureIdentity,
   formBond,
   hasIdentity,
+  isBondState,
   listBonds,
   listPrivateBonds,
   closeIntent,
@@ -17,6 +20,7 @@ import {
   loadIdentity,
   loadSecret,
   pubkeyHexFromIdentity,
+  verifyBond,
   type BondState,
   type BondVisibility,
   type RelayFilter,
@@ -31,7 +35,7 @@ import {
   recordVerificationInvoice,
   verificationStatus,
 } from './ledger.js';
-import { lightningFrom } from './lightning.js';
+import { lightningFrom, type LightningProvider } from './lightning.js';
 import {
   NOT_DISCOVERABLE_HINT,
   applyConfiguredIntent,
@@ -46,17 +50,100 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.19.0';
+export const VERSION = '0.20.0';
+
+function truthy(v: string | undefined): boolean {
+  return v !== undefined && !['', '0', 'false'].includes(v.toLowerCase());
+}
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
-// token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
+// token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only;
+// index.ts turns the auto token on for any non-loopback bind).
 const TOKEN = resolveToken();
 
-// Public-exposure mode: when set, the status UI never embeds the bearer token in
-// the page HTML (the operator enters it; agents read it from config). Turn this
-// on for any node reachable beyond a trusted LAN / login (e.g. a public reverse
-// proxy), so loading the page can't leak the token to anonymous visitors.
-const PUBLIC_MODE = !['', '0', 'false'].includes((process.env.PACT_PUBLIC_MODE ?? '').toLowerCase());
+/** Whether the API requires a bearer token (the resolved token, not just PACT_TOKEN). */
+export function authEnabled(): boolean {
+  return Boolean(TOKEN);
+}
+
+// The status UI never embeds the bearer token, except when the operator says
+// this listener sits behind an authenticating proxy (Umbrel's app_proxy):
+// PACT_UI_EMBED_TOKEN=1. PACT_PUBLIC_MODE (the old opt-in) is now the default;
+// setting it still forces embedding off.
+const EMBED_TOKEN = truthy(process.env.PACT_UI_EMBED_TOKEN) && !truthy(process.env.PACT_PUBLIC_MODE);
+
+// Hosts this daemon answers to (DNS-rebinding defense). Loopback names are
+// always allowed. PACT_ALLOWED_HOSTS adds names (comma-separated; `*` = any).
+// When it is unset, a token-protected node answers any host (the token is the
+// gate and is never on the page), and an open node answers loopback only.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+const ALLOWED_HOSTS = (process.env.PACT_ALLOWED_HOSTS ?? '')
+  .split(',')
+  .map((h) => h.trim().toLowerCase())
+  .filter(Boolean);
+
+function hostnameOf(hostHeader: string): string {
+  const h = hostHeader.trim().toLowerCase();
+  if (h.startsWith('[')) return h.slice(0, h.indexOf(']') + 1);
+  return h.split(':')[0];
+}
+
+function hostAllowed(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (!host) return false;
+  const name = hostnameOf(host);
+  if (LOOPBACK_HOSTS.has(name)) return true;
+  if (ALLOWED_HOSTS.includes('*') || ALLOWED_HOSTS.includes(name) || ALLOWED_HOSTS.includes(host.toLowerCase())) return true;
+  return Boolean(TOKEN) && ALLOWED_HOSTS.length === 0;
+}
+
+/**
+ * Cross-site request defense. A web page the operator visits can send
+ * "simple" requests (no preflight) to a loopback daemon; these checks refuse
+ * them. Sec-Fetch-Site is computed by the browser and can't be forged by the
+ * page; Origin is the fallback for older browsers.
+ */
+function sameOrigin(req: IncomingMessage): boolean {
+  const site = req.headers['sec-fetch-site'];
+  if (typeof site === 'string') return site === 'same-origin' || site === 'none';
+  const origin = req.headers.origin;
+  if (typeof origin !== 'string') return true; // not a browser request
+  try {
+    const o = new URL(origin);
+    const forwarded = req.headers['x-forwarded-host'];
+    return (
+      o.host === req.headers.host ||
+      (typeof forwarded === 'string' && o.host === forwarded) ||
+      ALLOWED_HOSTS.includes(o.hostname.toLowerCase())
+    );
+  } catch {
+    return false; // "null" and other opaque origins
+  }
+}
+
+/** A client error with its HTTP status (mapped in the request handler). */
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function identityHex(value: string, field: string): string {
+  try {
+    return pubkeyHexFromIdentity(value);
+  } catch {
+    throw new HttpError(400, `${field} is not a Nostr identity (did:nostr, npub or 64-hex)`);
+  }
+}
+
+function bondState(value: unknown, fallback: BondState): BondState {
+  if (value === undefined) return fallback;
+  if (!isBondState(value)) throw new HttpError(400, `state must be one of: ${BOND_STATES.join(', ')}`);
+  return value;
+}
 // Wallet provider: configured at runtime (via the UI / POST /wallet/connect,
 // persisted in PACT_HOME) or from PACT_NWC. Mutable so it can be (re)connected.
 let lightning = lightningFrom(loadNwcUri());
@@ -95,20 +182,28 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let data = '';
+    let tooLarge = false;
     req.on('data', (chunk) => {
+      if (tooLarge) return;
       data += chunk;
       if (data.length > 1_000_000) {
-        req.destroy();
-        reject(new Error('request body too large'));
+        tooLarge = true;
+        reject(new HttpError(413, 'request body too large'));
       }
     });
     req.on('end', () => {
+      if (tooLarge) return;
       if (!data) return resolve({});
+      let parsed: unknown;
       try {
-        resolve(JSON.parse(data) as Record<string, unknown>);
+        parsed = JSON.parse(data);
       } catch {
-        reject(new Error('invalid JSON body'));
+        return reject(new HttpError(400, 'invalid JSON body'));
       }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return reject(new HttpError(400, 'JSON body must be an object'));
+      }
+      resolve(parsed as Record<string, unknown>);
     });
     req.on('error', reject);
   });
@@ -131,7 +226,20 @@ function relaysFrom(url: URL): string[] {
   return relays.length ? relays : RELAYS;
 }
 
-export function createDaemon() {
+export interface DaemonOptions {
+  /**
+   * Serve the status UI at `/` (default true). The API-only listener
+   * (PACT_API_PORT) passes false: it answers `/` with 404, so a host-published
+   * direct port never serves a page at all.
+   */
+  serveUI?: boolean;
+  /** Replace the wallet provider (tests inject a stub). `null` = no wallet. */
+  lightning?: LightningProvider | null;
+}
+
+export function createDaemon(options: DaemonOptions = {}) {
+  const serveUI = options.serveUI ?? true;
+  if (options.lightning !== undefined) lightning = options.lightning;
   return createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -139,19 +247,46 @@ export function createDaemon() {
       const method = req.method ?? 'GET';
       const ln = lightning; // per-request snapshot (const → narrows across awaits)
 
-      // Status UI + health are unauthenticated (the UI itself injects the token
-      // for its API calls; on Umbrel the page is behind app_proxy).
+      if (!hostAllowed(req)) return json(res, 403, { error: 'host not allowed (set PACT_ALLOWED_HOSTS)' });
+
+      // Status UI + health are unauthenticated. The UI page carries no token
+      // (see ui.ts); it unlocks with the operator's token.
       if (path === '/' && method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(renderUI(TOKEN, process.env.PACT_PUBLIC_PORT, process.env.PACT_RELAY_PUBLIC_PORT, PUBLIC_MODE));
+        if (!serveUI) return json(res, 404, { error: 'not found', path, hint: 'API-only listener; the UI is on the main port' });
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'X-Frame-Options': 'DENY',
+          'Referrer-Policy': 'no-referrer',
+        });
+        return res.end(renderUI(TOKEN, process.env.PACT_PUBLIC_PORT, process.env.PACT_RELAY_PUBLIC_PORT, EMBED_TOKEN));
       }
       if (path === '/healthz') {
         return json(res, 200, {
           ok: true,
           version: VERSION,
+          auth: Boolean(TOKEN),
           wallet: Boolean(ln),
           verifyPriceSats: VERIFY_PRICE_SATS || undefined,
         });
+      }
+
+      if (!sameOrigin(req)) return json(res, 403, { error: 'cross-origin request refused' });
+      // A non-GET must declare a JSON body. Browsers can only send that
+      // cross-origin after a CORS preflight, which pactd never approves.
+      if (method !== 'GET' && method !== 'HEAD') {
+        const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+        if (type !== 'application/json') {
+          return json(res, 415, { error: 'Content-Type must be application/json' });
+        }
+      }
+
+      // Paid-verification market: when a price is set, strangers can buy a
+      // verification without the admin token, which also pays invoices and
+      // replaces the identity. They get the public verdict only — private
+      // sides need this node's key, which is reserved for the operator.
+      if (path === '/bonds/verify' && method === 'GET' && VERIFY_PRICE_SATS > 0) {
+        return await handleVerify(res, url, ln, authorized(req));
       }
 
       if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
@@ -164,7 +299,17 @@ export function createDaemon() {
       }
       if (path === '/identity' && method === 'POST') {
         const body = await readJson(req);
-        const identity = ensureIdentity(Boolean(body.force));
+        const force = body.force === true;
+        if (force && hasIdentity()) {
+          // Replacing the key orphans every bond made with it. Require the
+          // caller to name the key being replaced, so a stray or forged
+          // request can't do it (the old key is also backed up on disk).
+          const current = loadIdentity().pubkeyHex;
+          if (body.pubkeyHex !== current) {
+            return json(res, 409, { error: 'force replaces this node\'s key — pass the current pubkeyHex to confirm', pubkeyHex: current });
+          }
+        }
+        const identity = ensureIdentity(force);
         // A fresh key has no intent anywhere. If the operator pre-chose one
         // (PACT_INTENT_SEEKING), honor that explicit choice now that a key
         // exists; otherwise just say the node isn't discoverable and how to
@@ -188,12 +333,13 @@ export function createDaemon() {
         if (typeof body.counterparty !== 'string') {
           return json(res, 400, { error: 'counterparty (string) is required' });
         }
+        identityHex(body.counterparty, 'counterparty');
         const visibility = body.private === true || body.visibility === 'private' ? 'private' : 'public';
         const result = await formBond(loadSecret(), {
           counterparty: body.counterparty,
           // Omit bondId to auto-generate urn:mate:<uuid> (the proposer's id).
           bondId: typeof body.bondId === 'string' ? body.bondId : undefined,
-          state: (typeof body.state === 'string' ? body.state : 'proposed') as BondState,
+          state: bondState(body.state, 'proposed'),
           kind: typeof body.kind === 'string' ? body.kind : undefined,
           relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
           // History events are public-transport only; private bonds carry their
@@ -224,7 +370,7 @@ export function createDaemon() {
           bondId: body.bondId,
           // Omit counterparty to auto-resolve the proposer from the inbound proposal.
           counterparty: typeof body.counterparty === 'string' ? body.counterparty : undefined,
-          state: (typeof body.state === 'string' ? body.state : 'active') as BondState,
+          state: bondState(body.state, 'active'),
           // Omit kind to echo the proposal's kind; passing one is a deliberate
           // choice to describe the relationship differently than the proposer.
           kind: typeof body.kind === 'string' ? body.kind : undefined,
@@ -274,23 +420,13 @@ export function createDaemon() {
         if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
         const body = await readJson(req);
         if (typeof body.bondId !== 'string') return json(res, 400, { error: 'bondId (string) is required' });
-        // Resolve the bond's counterparty + channel from this node's own view
-        // unless given — reaffirmations always follow the bond's channel.
-        let counterparty = typeof body.counterparty === 'string' ? body.counterparty : undefined;
-        let visibility: BondVisibility | undefined =
+        // Core resolves the bond's counterparty + channel from this node's own
+        // view unless both are given (and refuses a bond that isn't mutual) —
+        // reaffirmations always follow the bond's channel.
+        const counterparty = typeof body.counterparty === 'string' ? body.counterparty : undefined;
+        if (counterparty) identityHex(counterparty, 'counterparty');
+        const visibility: BondVisibility | undefined =
           body.visibility === 'private' || body.private === true ? 'private' : body.visibility === 'public' ? 'public' : undefined;
-        if (!counterparty || !visibility) {
-          const selfHex = loadIdentity().pubkeyHex;
-          const [pub, priv] = await Promise.all([
-            listBonds({ '#d': [body.bondId], authors: [selfHex] }, RELAYS),
-            listPrivateBonds(loadSecret(), RELAYS, { bondId: body.bondId, author: selfHex }),
-          ]);
-          const own = [...priv.bonds, ...pub.bonds][0];
-          if (!own) return json(res, 404, { error: `no bond ${body.bondId} authored by this node — form or accept it first` });
-          counterparty = counterparty ?? own.counterparty ?? undefined;
-          visibility = visibility ?? own.visibility;
-        }
-        if (!counterparty) return json(res, 400, { error: 'could not resolve counterparty — pass it explicitly' });
         const result = await reaffirmBond(loadSecret(), {
           bondId: body.bondId,
           counterparty,
@@ -311,8 +447,8 @@ export function createDaemon() {
         // 'all' (default): public events + this node's decryptable gift wraps.
         // 'public' / 'private' narrow to one transport.
         const visibility = url.searchParams.get('visibility') ?? 'all';
-        if (author) filter.authors = [pubkeyHexFromIdentity(author)];
-        if (counterparty) filter['#p'] = [pubkeyHexFromIdentity(counterparty)];
+        if (author) filter.authors = [identityHex(author, 'author')];
+        if (counterparty) filter['#p'] = [identityHex(counterparty, 'counterparty')];
         if (bondId) filter['#d'] = [bondId];
         if (!author && !counterparty && !bondId) {
           // No filter: scope to this node's own bonds. Without an identity there's
@@ -347,76 +483,7 @@ export function createDaemon() {
         });
       }
       if (path === '/bonds/verify' && method === 'GET') {
-        const bondId = url.searchParams.get('bond_id');
-        if (!bondId) return json(res, 400, { error: 'bond_id query param required' });
-
-        // Paid-verification market (L402-style). Active only when a price is set
-        // AND a wallet is connected to collect to. First request → 402 + invoice;
-        // retry with ?payment_hash=<hash> once paid.
-        const paywalled = VERIFY_PRICE_SATS > 0 && Boolean(ln);
-        if (paywalled && ln) {
-          const paymentHash = url.searchParams.get('payment_hash');
-          if (!paymentHash) {
-            const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
-            if (!inv.paymentHash) {
-              return json(res, 502, { error: 'wallet returned no payment hash; cannot gate verification' });
-            }
-            recordPaymentHash(inv.paymentHash);
-            // Bind this invoice to this bond, single-use — see ledger.ts.
-            recordVerificationInvoice(inv.paymentHash, bondId);
-            return json(res, 402, {
-              error: 'payment required',
-              price_sats: VERIFY_PRICE_SATS,
-              invoice: inv.invoice,
-              payment_hash: inv.paymentHash,
-              hint: 'pay the invoice, then retry with &payment_hash=<hash>',
-            });
-          }
-          // Reject before bothering the wallet: the hash must be one we issued,
-          // for THIS bond, and not already redeemed. (Cheap local pre-check.)
-          const status = verificationStatus(paymentHash, bondId);
-          if (status === 'unknown') {
-            return json(res, 402, { error: 'unknown payment hash — request a fresh invoice for this bond', price_sats: VERIFY_PRICE_SATS });
-          }
-          if (status === 'wrong_bond') {
-            return json(res, 402, { error: 'payment hash was issued for a different bond', price_sats: VERIFY_PRICE_SATS });
-          }
-          if (status === 'spent') {
-            return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
-          }
-          const look = await ln.lookupInvoice({ paymentHash });
-          if (!look.paid) {
-            return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
-          }
-          // Authoritative single-use consume (synchronous; wins the race).
-          if (!consumeVerification(paymentHash, bondId)) {
-            return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
-          }
-        }
-
-        // Public events always count; gift-wrapped sides are included when this
-        // node holds a key that can decrypt them. To anyone else a private bond
-        // is invisible — verification of one is disclosure-mediated by design.
-        const pubSide = await listBonds({ '#d': [bondId] }, relaysFrom(url));
-        const privSide = hasIdentity()
-          ? await listPrivateBonds(loadSecret(), relaysFrom(url), { bondId })
-          : { relaysReached: [] as string[], bonds: [] };
-        const bonds = [...pubSide.bonds, ...privSide.bonds];
-        const authors = new Set(bonds.map((b) => b.author));
-        const mutual =
-          bonds.length >= 2 &&
-          bonds.every((b) => b.signature_valid) &&
-          bonds.some((b) => authors.has(b.counterparty ?? ''));
-        return json(res, 200, {
-          bond_id: bondId,
-          paid: paywalled ? true : undefined,
-          price_sats: paywalled ? VERIFY_PRICE_SATS : undefined,
-          relaysReached: [...new Set([...pubSide.relaysReached, ...privSide.relaysReached])],
-          count: bonds.length,
-          mutual,
-          private: bonds.some((b) => b.visibility === 'private') || undefined,
-          bonds,
-        });
+        return await handleVerify(res, url, ln, true);
       }
 
       // --- wallet (non-custodial sats via NWC) ---
@@ -514,8 +581,82 @@ export function createDaemon() {
 
       return json(res, 404, { error: 'not found', path });
     } catch (error) {
+      if (res.headersSent) return res.end();
+      if (error instanceof HttpError) return json(res, error.status, { error: error.message });
+      if (error instanceof PactError) {
+        const status = error.code === 'not_found' ? 404 : error.code === 'conflict' ? 409 : 400;
+        return json(res, status, { error: error.message });
+      }
       return json(res, 500, { error: error instanceof Error ? error.message : String(error) });
     }
+  });
+}
+
+/**
+ * GET /bonds/verify. The verdict itself is core's verifyBond (one mutual rule
+ * for the daemon, SDK and CLI). `withPrivate` includes the gift-wrapped sides
+ * this node can decrypt — only for the authenticated operator.
+ */
+async function handleVerify(res: ServerResponse, url: URL, ln: LightningProvider | null, withPrivate: boolean): Promise<void> {
+  const bondId = url.searchParams.get('bond_id');
+  if (!bondId) return json(res, 400, { error: 'bond_id query param required' });
+
+  // Paid-verification market (L402-style). Active only when a price is set
+  // AND a wallet is connected to collect to. First request → 402 + invoice;
+  // retry with ?payment_hash=<hash> once paid.
+  const paywalled = VERIFY_PRICE_SATS > 0 && Boolean(ln);
+  if (paywalled && ln) {
+    const paymentHash = url.searchParams.get('payment_hash');
+    if (!paymentHash) {
+      const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
+      if (!inv.paymentHash) {
+        return json(res, 502, { error: 'wallet returned no payment hash; cannot gate verification' });
+      }
+      recordPaymentHash(inv.paymentHash);
+      // Bind this invoice to this bond, single-use — see ledger.ts. Throws if
+      // it can't be persisted: never hand out an invoice we can't honor.
+      recordVerificationInvoice(inv.paymentHash, bondId);
+      return json(res, 402, {
+        error: 'payment required',
+        price_sats: VERIFY_PRICE_SATS,
+        invoice: inv.invoice,
+        payment_hash: inv.paymentHash,
+        hint: 'pay the invoice, then retry with &payment_hash=<hash>',
+      });
+    }
+    // Reject before bothering the wallet: the hash must be one we issued,
+    // for THIS bond, and not already redeemed. (Cheap local pre-check.)
+    const status = verificationStatus(paymentHash, bondId);
+    if (status === 'unknown') {
+      return json(res, 402, { error: 'unknown payment hash — request a fresh invoice for this bond', price_sats: VERIFY_PRICE_SATS });
+    }
+    if (status === 'wrong_bond') {
+      return json(res, 402, { error: 'payment hash was issued for a different bond', price_sats: VERIFY_PRICE_SATS });
+    }
+    if (status === 'spent') {
+      return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
+    }
+    const look = await ln.lookupInvoice({ paymentHash });
+    if (!look.paid) {
+      return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+    }
+    // Authoritative single-use consume (synchronous after the await; wins
+    // the race). Throws (→ 500, nothing served) if it can't be persisted.
+    if (!consumeVerification(paymentHash, bondId)) {
+      return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
+    }
+  }
+
+  // Public events always count; gift-wrapped sides are included when this
+  // node holds a key that can decrypt them AND the caller is the operator.
+  // To anyone else a private bond is invisible — disclosure-mediated by design.
+  const secret = withPrivate && hasIdentity() ? loadSecret() : undefined;
+  const verdict = await verifyBond(bondId, relaysFrom(url), secret ? { secret } : {});
+  return json(res, 200, {
+    bond_id: bondId,
+    paid: paywalled ? true : undefined,
+    price_sats: paywalled ? VERIFY_PRICE_SATS : undefined,
+    ...verdict,
   });
 }
 
@@ -534,7 +675,9 @@ function startEventStream(req: IncomingMessage, res: ServerResponse, url: URL): 
 
   const self = loadIdentity().pubkeyHex;
   const relays = relaysFrom(url);
-  const intervalMs = Math.max(5000, Number(url.searchParams.get('interval') ?? 30000));
+  // A typo (?interval=x) must not become NaN → a 1 ms timer hammering relays.
+  const requested = Number(url.searchParams.get('interval') ?? 30000);
+  const intervalMs = Number.isFinite(requested) ? Math.max(5000, requested) : 30000;
   const seen = new Map<string, string>();
 
   res.write(`event: ready\ndata: ${JSON.stringify({ pubkey: self, intervalMs })}\n\n`);
@@ -557,11 +700,18 @@ function startEventStream(req: IncomingMessage, res: ServerResponse, url: URL): 
     }
   };
 
-  void poll();
-  const pollTimer = setInterval(() => void poll(), intervalMs);
+  // Re-arm only after a poll settles, so slow relays can't stack polls up.
+  let closed = false;
+  let pollTimer: NodeJS.Timeout | undefined;
+  const loop = async (): Promise<void> => {
+    await poll();
+    if (!closed) pollTimer = setTimeout(() => void loop(), intervalMs);
+  };
+  void loop();
   const keepalive = setInterval(() => res.write(': keepalive\n\n'), 15000);
   req.on('close', () => {
-    clearInterval(pollTimer);
+    closed = true;
+    clearTimeout(pollTimer);
     clearInterval(keepalive);
   });
 }

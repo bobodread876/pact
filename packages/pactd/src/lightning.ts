@@ -91,6 +91,14 @@ export class NwcProvider implements LightningProvider {
     if (!/^[0-9a-f]{64}$/.test(walletPubkey) || !relay || !secretHex) {
       throw new Error('invalid NWC URI (expected nostr+walletconnect://<pubkey>?relay=..&secret=..)');
     }
+    // A bad secret would decode to an empty key and only fail later, on every
+    // call (making every paid /bonds/verify a 500). Reject it at connect time.
+    if (!/^[0-9a-f]{64}$/i.test(secretHex)) {
+      throw new Error('invalid NWC URI: secret must be 64 hex characters');
+    }
+    if (!/^wss?:\/\//.test(relay)) {
+      throw new Error('invalid NWC URI: relay must be a ws:// or wss:// URL');
+    }
     return new NwcProvider({ walletPubkey, relay, secret: hexToBytes(secretHex) });
   }
 
@@ -208,7 +216,7 @@ export class NwcProvider implements LightningProvider {
   async lookupInvoice(opts: { invoice?: string; paymentHash?: string }): Promise<{ paid: boolean } & Record<string, unknown>> {
     const params = opts.paymentHash ? { payment_hash: opts.paymentHash } : { invoice: opts.invoice };
     const r = await this.request('lookup_invoice', params);
-    return { paid: Boolean(r.preimage) || r.settled_at != null || r.paid === true, ...r };
+    return { ...r, paid: invoicePaid(r) };
   }
 
   async listTransactions(opts: { limit?: number; unpaid?: boolean } = {}): Promise<WalletTransaction[]> {
@@ -285,6 +293,20 @@ export class NwcProvider implements LightningProvider {
 }
 
 /** Build a Lightning provider from an NWC URI (validates it), or null if empty. */
+/**
+ * Whether a NIP-47 lookup_invoice result shows the invoice PAID.
+ *
+ * For an incoming invoice the payee wallet generated the preimage, so it
+ * knows it before anyone pays (NIP-47: preimage is "optional if unpaid") — a
+ * preimage proves nothing there. Only settlement does. For an outgoing payment
+ * the preimage is the proof of payment.
+ */
+export function invoicePaid(r: Record<string, unknown>): boolean {
+  const settled = r.state === 'settled' || (typeof r.settled_at === 'number' && r.settled_at > 0);
+  if (settled) return true;
+  return r.type === 'outgoing' && typeof r.preimage === 'string' && r.preimage.length > 0;
+}
+
 export function lightningFrom(uri: string | undefined): LightningProvider | null {
   return uri ? NwcProvider.fromUri(uri) : null;
 }

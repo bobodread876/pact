@@ -14,11 +14,59 @@ import {
   selectBondRumors,
   verifyProof,
   type MateDocument,
+  type NostrEvent,
   type PrivateBondRumor,
+  type RelayFilter,
 } from '@mate-protocol/core';
 
 import { kindFromContent } from './bond.js';
 import type { BondView } from './index.js';
+import { latestPerKey } from './mutual.js';
+
+/** Wraps fetched per page when reading an inbox. */
+const INBOX_PAGE = 200;
+/** Upper bound on pages read (INBOX_PAGE × this wraps), so a flood can't hang a read. */
+const INBOX_MAX_PAGES = 50;
+
+/**
+ * Fetch every kind:1059 gift wrap addressed to `secret`'s key, paging backwards
+ * with `until` cursors. One fixed window is not enough: the inbox is
+ * public-write and shared with NIP-17 DMs, and NIP-59 backdates wraps by up to
+ * two days, so a single page of the newest wraps can push a real proposal out.
+ */
+export async function fetchInbox(
+  secret: Uint8Array,
+  relays: string[],
+): Promise<{ relaysReached: string[]; events: NostrEvent[] }> {
+  const selfHex = keypairFromSecret(secret).pubkeyHex;
+  const byId = new Map<string, NostrEvent>();
+  const reached = new Set<string>();
+  let until: number | undefined;
+  for (let page = 0; page < INBOX_MAX_PAGES; page++) {
+    const filter = {
+      kinds: [KIND_GIFT_WRAP],
+      '#p': [selfHex],
+      limit: INBOX_PAGE,
+      ...(until === undefined ? {} : { until }),
+    } as RelayFilter;
+    const { events, relaysReached } = await resolveEvents(relays, filter);
+    for (const r of relaysReached) reached.add(r);
+    let fresh = 0;
+    let oldest = Infinity;
+    for (const event of events) {
+      if (!byId.has(event.id)) {
+        byId.set(event.id, event);
+        fresh += 1;
+      }
+      oldest = Math.min(oldest, event.created_at);
+    }
+    // Done when a page brings nothing new or is short on every relay. `until`
+    // is inclusive, so events sharing the oldest second are re-read, never lost.
+    if (fresh === 0 || events.length < INBOX_PAGE || !Number.isFinite(oldest)) break;
+    until = oldest;
+  }
+  return { relaysReached: [...reached], events: [...byId.values()] };
+}
 
 export interface PrivateBondFilter {
   /** Match a specific bond id (post-decryption — wraps carry no bond tags). */
@@ -38,15 +86,23 @@ export interface PrivateBondFilter {
  * Public bonds get the same flag from the event signature alone; the embedded
  * proof is what survives disclosure, so it is what we verify here.
  */
-function toBondView(r: PrivateBondRumor): BondView {
+export function toBondView(r: PrivateBondRumor): BondView {
   let proofValid = false;
   try {
     const doc = JSON.parse(r.rumor.content) as MateDocument;
     const proofs = doc.proofs ?? [];
     proofValid =
       proofs.length > 0 &&
-      proofs.every((proof) => verifyProof(doc, proof)) &&
-      pubkeyHexFromIdentity(doc.subject.id) === r.author;
+      // Every proof verifies AND is made by the authenticated author's key
+      // (verifyProof checks the signature, not who the verificationMethod is).
+      proofs.every((proof) => verifyProof(doc, proof) && pubkeyHexFromIdentity(proof.verificationMethod) === r.author) &&
+      pubkeyHexFromIdentity(doc.subject.id) === r.author &&
+      // The signed document must say what the rumor tags (which the BondView
+      // reports and the verdict counts) say — otherwise disclosure would prove
+      // something other than what was counted.
+      doc.bond.id === r.bond &&
+      pubkeyHexFromIdentity(doc.object.id) === r.counterparty &&
+      doc.bond.state === r.state;
   } catch {
     proofValid = false;
   }
@@ -76,17 +132,12 @@ export async function listPrivateBonds(
   relays: string[],
   filter: PrivateBondFilter = {},
 ): Promise<{ relaysReached: string[]; bonds: BondView[] }> {
-  const selfHex = keypairFromSecret(secret).pubkeyHex;
-  const { events, relaysReached } = await resolveEvents(relays, {
-    kinds: [KIND_GIFT_WRAP],
-    '#p': [selfHex],
-    limit: 200,
-  });
+  const { events, relaysReached } = await fetchInbox(secret, relays);
 
   const authorHex = filter.author ? pubkeyHexFromIdentity(filter.author) : null;
   const counterpartyHex = filter.counterparty ? pubkeyHexFromIdentity(filter.counterparty) : null;
 
-  const latest = new Map<string, BondView>();
+  const views: BondView[] = [];
   for (const rumor of selectBondRumors(events, secret)) {
     // State views come from kind:30317 rumors only; kind:1317 lifecycle rumors
     // (reaffirmations etc.) are resolved separately by listReaffirmations.
@@ -94,20 +145,11 @@ export async function listPrivateBonds(
     if (filter.bondId && rumor.bond !== filter.bondId) continue;
     if (authorHex && rumor.author !== authorHex) continue;
     if (counterpartyHex && rumor.counterparty !== counterpartyHex) continue;
-    const view = toBondView(rumor);
-    const key = `${view.author}:${view.bond ?? view.id}`;
-    const prior = latest.get(key);
-    // NIP-01 replaceable semantics, applied client-side: newest created_at
-    // wins; equal timestamps tie-break to the lexicographically lowest id.
-    if (
-      !prior ||
-      view.created_at > prior.created_at ||
-      (view.created_at === prior.created_at && view.id < prior.id)
-    ) {
-      latest.set(key, view);
-    }
+    views.push(toBondView(rumor));
   }
 
-  const bonds = [...latest.values()].sort((a, b) => b.created_at - a.created_at);
+  // kind:1059 is a regular kind, so perform the replaceable reduction the relay
+  // does for public kind:30317: latest per (author, bond).
+  const bonds = latestPerKey(views, (v) => `${v.author}:${v.bond ?? v.id}`).sort((a, b) => b.created_at - a.created_at);
   return { relaysReached, bonds };
 }

@@ -237,11 +237,13 @@ export class Pact {
 
   /**
    * Reaffirm a bond — publish `bond.reaffirmed`, the deliberate act of
-   * choosing the bond again. Follows the bond's channel.
+   * choosing the bond again. Follows the bond's channel: unless both
+   * `counterparty` and `visibility` are given, the bond is resolved from this
+   * identity's view and must be mutual (never guessed public).
    */
   reaffirmBond(
     bondId: string,
-    opts: { counterparty: string; visibility?: BondVisibility; relays?: string[] },
+    opts: { counterparty?: string; visibility?: BondVisibility; relays?: string[] } = {},
   ): Promise<ReaffirmBondResult> {
     return coreReaffirmBond(this.secret, {
       bondId,
@@ -287,7 +289,7 @@ export class Pact {
 
   /**
    * Poll the inbox on an interval, invoking `onBond` once per newly-seen bond
-   * state (keyed by bond id + author). Returns a `stop()` function. A simple
+   * state (keyed by bond id + author + channel). Returns a `stop()` function. A simple
    * poll loop — for a long-lived push stream, pactd's `/events` SSE is the
    * heavier option.
    */
@@ -302,7 +304,9 @@ export class Pact {
       try {
         const { bonds } = await this.inbox(opts.relays);
         for (const b of bonds) {
-          const key = `${b.bond}:${b.author}`;
+          // Visibility is part of the key: a counterparty can hold a public
+          // and a private side for one bond, in different states.
+          const key = `${b.bond}:${b.author}:${b.visibility}`;
           if (seen.get(key) !== (b.state ?? '')) {
             seen.set(key, b.state ?? '');
             if (!stopped) onBond(b);

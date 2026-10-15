@@ -56,7 +56,7 @@ The entire left side is open source and runs with zero Pact-cloud. The managed p
 
 | Layer | What | Open? | Runs where |
 |---|---|---|---|
-| **L1 — Protocol** | MATE.md core (bond format, state machine, proofs, canonicalization) + NIP-BD transport. Pact *depends on* it. | OSS (MIT) | vendored lib |
+| **L1 — Protocol** | MATE.md core (bond format, state machine, proofs, canonicalization) + NIP-BD transport. Pact *depends on* it. | OSS (MIT) | npm dependency (`@mate-protocol/core`) |
 | **L2a — Pact Core** | The relationship *runtime*: lifecycle, policy, heartbeat, interop, local store, relay client, signer. | OSS | user's machine |
 | **L2b — Form factors** | SDKs, sidecar daemon, CLI, MCP server, platform plugins, self-host bundle. | OSS | user's machine |
 | **L2c — Managed plane** | Hosted relays + durable history, verification/DID-VC API, directory + matching, dashboard, enterprise. | Commercial | Pact cloud *or* self-hostable enterprise build |
@@ -152,8 +152,8 @@ This keeps the sovereignty promise intact while still allowing the network-effec
 ## 10. Security & privacy
 
 - **Authenticity** — every bond/event verified via L1 signatures; no trust in the transport.
-- **Consent integrity** — a counterparty's state only counts when carried by *their* signed event; no forged acceptance.
-- **Privacy** — public bonds by default; **private bonds via NIP-44 + NIP-59 gift wrap** (shipped: pact-core 0.3.0 / pactd 0.14.0, mechanism in MATE.md extension §13). The bond event stays an unsigned rumor wrapped once for the counterparty and once for the author (copy-to-self); relays see an ephemeral signer, the recipient `p` tag, and a fuzzed timestamp — no bond id, state, or counterparty linkage. Because rumors are unsigned, every private bond document carries an **embedded BIP-340 proof**, so either party can selectively disclose the document and the disclosure is independently verifiable. Verification of a private bond is parties-only by design: `verifyBond` without the decryption key finds nothing.
+- **Consent integrity** — a counterparty's state only counts when carried by *their* signed event; no forged acceptance. A bond is mutual only when two parties' latest valid sides name each other and still consent (pact-core `findMutualPair`); an accept never overrides a withdrawn or rejected proposal.
+- **Privacy** — public bonds by default; **private bonds via NIP-44 + NIP-59 gift wrap** (shipped; mechanism in MATE.md extension §13). The bond event stays an unsigned rumor wrapped once for the counterparty and once for the author (copy-to-self); relays see an ephemeral signer, the recipient `p` tag, and a fuzzed timestamp — no bond id, state, or counterparty linkage. Because rumors are unsigned, every private bond document carries an **embedded BIP-340 proof**, so either party can selectively disclose the document and the disclosure is independently verifiable. Verification of a private bond is parties-only by design: `verifyBond` without the decryption key finds nothing.
 - **Process isolation** — the sidecar holds keys separately from the (often less-trusted) agent process.
 - **Supply chain** — reproducible builds, signed releases — table stakes for a sovereign-computing audience.
 

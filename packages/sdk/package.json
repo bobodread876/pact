@@ -1,8 +1,20 @@
 {
   "name": "pact-sdk",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Pact SDK — embed agent-relationship bonds in your TypeScript app (no daemon, no MCP).",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bobodread876/pact.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/bobodread876/pact/tree/main/packages/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/bobodread876/pact/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,12 +25,13 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc"
   },
   "dependencies": {
-    "pact-core": "^0.6.0"
+    "pact-core": "^0.7.0"
   }
 }

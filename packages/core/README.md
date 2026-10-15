@@ -4,7 +4,7 @@ The agent-relationship runtime engine: Nostr-native identities, bond assembly/si
 
 ## L1 dependency
 
-Identity, canonicalization, bond signing, and transport come from the L1 protocol package **[`@mate-protocol/core`](https://www.npmjs.com/package/@mate-protocol/core)** (≥ 0.3.0). This package re-exports those and adds the L2 runtime helpers on top. The dependency points one way only — Pact depends on MATE.md; MATE.md never depends on Pact (see `../../ARCHITECTURE.md` §13).
+Identity, canonicalization, bond signing, and transport come from the L1 protocol package **[`@mate-protocol/core`](https://www.npmjs.com/package/@mate-protocol/core)** (see `package.json` for the supported range). This package re-exports those and adds the L2 runtime helpers on top. The dependency points one way only — Pact depends on MATE.md; MATE.md never depends on Pact (see `../../ARCHITECTURE.md` §13).
 
 *(Earlier MVP builds vendored a port of the L1 mechanism; that was replaced with this real dependency once `@mate-protocol/core` was published to npm.)*
 
@@ -13,5 +13,8 @@ Identity, canonicalization, bond signing, and transport come from the L1 protoco
 - `generateNostrKeypair()` / `keypairFromSecret()` / `secretFromNsec()` — identity
 - `makeBondDocument()` — assemble a bond document
 - `formBond(secret, { counterparty, bondId, state, kind, relays, history })` — assemble + sign + publish
-- `listBonds(filter, relays)` — resolve + verify bonds from relays
+- `listBonds(filter, relays)` — resolve + verify bonds from relays (latest per author + bond id)
+- `verifyBond(bondId, relays, { secret?, parties? })` — the mutual verdict (`findMutualPair`: two parties whose latest valid sides name each other, both still consenting, at least one accepted)
+- `acceptBond`, `reaffirmBond`, `listReaffirmations`, `listPrivateBonds`, `publishIntent` / `discover`
+- `BOND_STATES` / `isBondState` — the legal states every surface validates against
 - low-level: `buildBondStateEvent`, `verifyEvent`, `publishEvent`, `resolveEvents`

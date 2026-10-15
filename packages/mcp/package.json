@@ -1,14 +1,27 @@
 {
   "name": "pact-mcp",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Pact MCP server — give any MCP-capable agent the tools to form, manage, and verify relationship bonds (thin client over a pactd daemon).",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bobodread876/pact.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/bobodread876/pact/tree/main/packages/mcp#readme",
+  "bugs": {
+    "url": "https://github.com/bobodread876/pact/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "bin": {
     "pact-mcp": "./dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",

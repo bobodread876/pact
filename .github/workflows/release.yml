@@ -1,0 +1,85 @@
+name: release
+
+# Push a `pactd-v<version>` tag (equal to packages/pactd/package.json) to build
+# and publish the multi-arch pactd image, npm-publish every workspace whose
+# version isn't on npm yet, and sync the Umbrel app into the store repo.
+on:
+  push:
+    tags: ['pactd-v*']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+      HAS_UMBREL_STORE_TOKEN: ${{ secrets.UMBREL_STORE_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run check:versions
+
+      - name: Tag matches the pactd version
+        id: version
+        run: |
+          v=$(node -p "require('./packages/pactd/package.json').version")
+          test "${GITHUB_REF_NAME}" = "pactd-v${v}" || { echo "tag ${GITHUB_REF_NAME} != pactd-v${v}"; exit 1; }
+          echo "version=${v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/stack/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/bobodread876/pactd:${{ steps.version.outputs.version }}
+            ghcr.io/bobodread876/pactd:latest
+
+      - name: npm publish (versions not yet on npm)
+        if: ${{ env.HAS_NPM_TOKEN == 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for ws in core sdk cli pactd mcp; do
+            name=$(node -p "require('./packages/$ws/package.json').name")
+            ver=$(node -p "require('./packages/$ws/package.json').version")
+            if npm view "$name@$ver" version >/dev/null 2>&1; then
+              echo "$name@$ver already published"
+            else
+              npm publish -w "packages/$ws" --access public
+            fi
+          done
+
+      - name: Sync the Umbrel app into the store repo
+        if: ${{ env.HAS_UMBREL_STORE_TOKEN == 'true' }}
+        env:
+          UMBREL_STORE_TOKEN: ${{ secrets.UMBREL_STORE_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${UMBREL_STORE_TOKEN}@github.com/bobodread876/pact-umbrel-store.git" store
+          cp packages/stack/umbrel/umbrel-app-store.yml store/
+          rm -rf store/pact-pactd && cp -R packages/stack/umbrel/pact-pactd store/
+          cd store
+          git config user.name "pact release"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || { git commit -m "pact-pactd ${{ steps.version.outputs.version }}"; git push; }

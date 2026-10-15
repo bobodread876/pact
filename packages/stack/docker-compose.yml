@@ -8,6 +8,11 @@
 # defaults its relays to the bundled relay (PACT_RELAYS=ws://relay:7777), so your
 # bonds can live entirely on your box. pactd is exposed on host loopback only.
 #
+# The container binds 0.0.0.0, so with PACT_TOKEN empty pactd generates an
+# access token on first boot. Read it with:
+#   docker compose exec pactd cat /data/.pact/token
+# and unlock the UI with it (or open http://localhost:8787/#token=<token>).
+#
 # To build pactd from source instead of pulling:
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 name: pact-stack
@@ -21,14 +26,17 @@ services:
     # internal only — reachable by pactd on the compose network as `relay`
 
   pactd:
-    image: ghcr.io/bobodread876/pactd:latest
+    # Pinned to the pactd release this compose was written for (CI checks it
+    # matches packages/pactd/package.json). Never :latest — it drifts.
+    image: ghcr.io/bobodread876/pactd:0.20.0
     restart: unless-stopped
     depends_on:
       - relay
     environment:
       PACT_HOST: 0.0.0.0
       PACT_PORT: "8787"
-      PACT_RELAYS: ws://relay:7777
+      # A relay set saved from the UI (relays.json) takes precedence over this.
+      PACT_RELAYS: ${PACT_RELAYS:-ws://relay:7777}
       PACT_NWC: ${PACT_NWC:-}
       PACT_VERIFY_PRICE_SATS: ${PACT_VERIFY_PRICE_SATS:-0}
       PACT_TOKEN: ${PACT_TOKEN:-}

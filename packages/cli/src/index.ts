@@ -6,13 +6,14 @@
 
 import { parseArgs } from 'node:util';
 
-import { ensureIdentity, hasIdentity, loadIdentity } from 'pact-core';
+import { BOND_STATES, ensureIdentity, hasIdentity, isBondState, loadIdentity } from 'pact-core';
 import { Pact, type BondState, type BondView } from 'pact-sdk';
 
 const HELP = `pact — agent relationship bonds from the shell
 
 Usage:
-  pact keygen [--force]              Create the local identity (~/.pact)
+  pact keygen [--force]              Create the local identity (~/.pact). --force replaces it
+                                     (the old key is kept as identity.<unix>.bak).
   pact whoami                        Show this node's identity
   pact bond form <counterparty> [bondId] [--state proposed] [--kind <k>] [--no-history] [--private]
                                      Propose a bond. Omit bondId to auto-generate urn:mate:<uuid>.
@@ -24,8 +25,10 @@ Usage:
   pact bond verify <bondId>          (private sides this key can decrypt are included)
   pact intent <about> --seeking <k1,k2>   Become findable (or: pact intent --closed to unlist)
   pact discover [--kind <k>]         Browse the open board, ranked by longevity records
-  pact bond reaffirm <bondId> [--from <counterparty>]
-                                     Choose the bond again: publish bond.reaffirmed on its channel.
+  pact bond reaffirm <bondId> [--from <counterparty>] [--private|--public]
+                                     Choose the bond again: publish bond.reaffirmed on its channel
+                                     (the bond must be mutual; the channel is resolved unless
+                                     both --from and --private/--public are given).
 
 Identity (did:nostr / npub / hex) is resolved automatically.
 
@@ -84,7 +87,8 @@ async function main(): Promise<void> {
   switch (command) {
     case 'keygen': {
       const id = ensureIdentity(Boolean(values.force));
-      out(json, `${id.created ? 'Created' : 'Existing'} identity:\n  ${id.did}\n  ${id.npub}`, id);
+      const backup = id.backup ? `\n  previous key backed up to ${id.backup}` : '';
+      out(json, `${id.created ? 'Created' : 'Existing'} identity:\n  ${id.did}\n  ${id.npub}${backup}`, id);
       return;
     }
 
@@ -147,10 +151,15 @@ async function main(): Promise<void> {
           process.exitCode = 2;
           return;
         }
+        if (values.state !== undefined && !isBondState(values.state)) {
+          console.error(`--state must be one of: ${BOND_STATES.join(', ')}`);
+          process.exitCode = 2;
+          return;
+        }
         const result = await pact.formBond({
           counterparty,
           bondId,
-          state: (values.state as Parameters<typeof pact.formBond>[0]['state']) ?? 'proposed',
+          state: (values.state as BondState | undefined) ?? 'proposed',
           kind: values.kind as string | undefined,
           history: !values['no-history'],
           visibility: values.private ? 'private' : undefined,
@@ -170,6 +179,11 @@ async function main(): Promise<void> {
         const [bondId] = rest;
         if (!bondId) {
           console.error('usage: pact bond accept <bondId> [--from <counterparty>] [--state active]');
+          process.exitCode = 2;
+          return;
+        }
+        if (values.state !== undefined && !isBondState(values.state)) {
+          console.error(`--state must be one of: ${BOND_STATES.join(', ')}`);
           process.exitCode = 2;
           return;
         }
@@ -211,20 +225,14 @@ async function main(): Promise<void> {
           process.exitCode = 2;
           return;
         }
-        let counterparty = values.from as string | undefined;
-        let visibility;
-        if (!counterparty || !visibility) {
-          const { bonds } = await pact.listBonds({ bondId });
-          const own = bonds.find((b) => b.author === pact.identity.pubkeyHex);
-          if (!own && !counterparty) {
-            console.error(`no bond ${bondId} authored by this identity — pass --from <counterparty>`);
-            process.exitCode = 1;
-            return;
-          }
-          counterparty = counterparty ?? own?.counterparty ?? undefined;
-          visibility = own?.visibility;
-        }
-        const result = await pact.reaffirmBond(bondId, { counterparty: counterparty!, visibility });
+        // Core resolves the counterparty and the bond's channel (and refuses a
+        // bond that isn't mutual) unless both --from and --private/--public are
+        // given. It never defaults to public: that would publish a private
+        // bond's id and linkage on the open graph.
+        const result = await pact.reaffirmBond(bondId, {
+          counterparty: values.from as string | undefined,
+          visibility: values.private ? 'private' : values.public ? 'public' : undefined,
+        });
         const reached = result.event.relays.filter((r) => r.accepted).length;
         out(json, `Reaffirmed '${result.bondId}'${result.visibility === 'private' ? ' (private)' : ''} — chosen again (→ ${reached} relay(s)).`, result);
         return;

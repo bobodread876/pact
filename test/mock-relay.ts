@@ -1,6 +1,10 @@
 // In-process Nostr relay for tests: NIP-01 EVENT/REQ/EOSE/OK over a real
-// WebSocket server, with the filter subset pact uses (kinds, authors, #d, #p, #t).
+// WebSocket server, with the filter subset pact uses (kinds, authors, #d, #p,
+// #t, since, until, limit). Behaves like a real relay where it matters for
+// limit-dependent code: it rejects events whose id/signature don't verify, and
+// it serves the NEWEST `limit` matches (created_at desc, then id asc).
 
+import { verifyEvent } from '@mate-protocol/core';
 import { WebSocketServer } from 'ws';
 
 interface StoredEvent {
@@ -19,6 +23,8 @@ interface Filter {
   '#d'?: string[];
   '#p'?: string[];
   '#t'?: string[];
+  since?: number;
+  until?: number;
   limit?: number;
 }
 
@@ -29,6 +35,8 @@ function tagValues(event: StoredEvent, name: string): string[] {
 function matches(event: StoredEvent, filter: Filter): boolean {
   if (filter.kinds && !filter.kinds.includes(event.kind)) return false;
   if (filter.authors && !filter.authors.includes(event.pubkey)) return false;
+  if (filter.since !== undefined && event.created_at < filter.since) return false;
+  if (filter.until !== undefined && event.created_at > filter.until) return false;
   for (const key of ['#d', '#p', '#t'] as const) {
     const wanted = filter[key];
     if (wanted && !tagValues(event, key.slice(1)).some((v) => wanted.includes(v))) return false;
@@ -66,13 +74,26 @@ export function startMockRelay(): Promise<MockRelay> {
           ws.send(JSON.stringify(['OK', event.id, false, 'blocked: test relay rejects writes']));
           return;
         }
-        // Addressable kinds (30000–39999): replace prior (author, d) event.
+        if (!verifyEvent(event)) {
+          ws.send(JSON.stringify(['OK', event.id, false, 'invalid: bad id or signature']));
+          return;
+        }
+        // Addressable kinds (30000–39999): keep only the newest (author, d) event
+        // (NIP-01: newest created_at, ties to the lowest id).
         if (event.kind >= 30000 && event.kind < 40000) {
           const d = tagValues(event, 'd')[0];
           const prior = events.findIndex(
             (e) => e.kind === event.kind && e.pubkey === event.pubkey && tagValues(e, 'd')[0] === d,
           );
-          if (prior >= 0) events.splice(prior, 1);
+          if (prior >= 0) {
+            const old = events[prior];
+            const newer = event.created_at > old.created_at || (event.created_at === old.created_at && event.id < old.id);
+            if (!newer) {
+              ws.send(JSON.stringify(['OK', event.id, true, 'duplicate: have a newer event']));
+              return;
+            }
+            events.splice(prior, 1);
+          }
         }
         events.push(event);
         ws.send(JSON.stringify(['OK', event.id, true, '']));
@@ -80,7 +101,10 @@ export function startMockRelay(): Promise<MockRelay> {
         reqs += 1;
         const subId = msg[1];
         const filter = (msg[2] ?? {}) as Filter;
-        const matched = events.filter((e) => matches(e, filter)).slice(0, filter.limit ?? 500);
+        const matched = events
+          .filter((e) => matches(e, filter))
+          .sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+          .slice(0, filter.limit ?? 500);
         for (const event of matched) {
           ws.send(JSON.stringify(['EVENT', subId, event]));
         }

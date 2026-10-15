@@ -3,7 +3,7 @@
 // activity, so the agent never sees unrelated transactions from other apps
 // sharing the same NWC wallet/node. Sovereign: local-only, in PACT_HOME.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { pactHome } from 'pact-core';
@@ -75,13 +75,17 @@ function loadVerifications(): Map<string, VerificationInvoice> {
   return vcache;
 }
 
+/**
+ * Persist the verification ledger atomically (temp file + rename). Throws on
+ * failure: the single-use guarantee is only as good as this write, so a
+ * read-only or full PACT_HOME must fail the request, not silently degrade to
+ * an in-memory ledger that a restart forgets.
+ */
 function persistVerifications(map: Map<string, VerificationInvoice>): void {
-  try {
-    mkdirSync(pactHome(), { recursive: true });
-    writeFileSync(verificationsPath(), JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
-  } catch {
-    // best effort
-  }
+  mkdirSync(pactHome(), { recursive: true });
+  const tmp = `${verificationsPath()}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
+  renameSync(tmp, verificationsPath());
 }
 
 /** Record an invoice issued to gate verification of a specific bond. */
@@ -89,7 +93,12 @@ export function recordVerificationInvoice(hash: string, bondId: string): void {
   const map = loadVerifications();
   if (map.has(hash)) return;
   map.set(hash, { bondId, consumed: false });
-  persistVerifications(map);
+  try {
+    persistVerifications(map);
+  } catch (error) {
+    map.delete(hash);
+    throw error;
+  }
 }
 
 export type VerificationStatus = 'ok' | 'unknown' | 'wrong_bond' | 'spent';
@@ -106,14 +115,21 @@ export function verificationStatus(hash: string, bondId: string): VerificationSt
 /**
  * Authoritative single-use gate. Synchronous (no await between check and set),
  * so concurrent requests for the same hash serialize: the first consumes and
- * returns true, any other sees `consumed` and returns false. Call only after
- * the invoice is confirmed paid.
+ * returns true, any other sees `consumed` and returns false. Throws when the
+ * consumption can't be persisted. Call only after the invoice is confirmed paid.
  */
 export function consumeVerification(hash: string, bondId: string): boolean {
   const map = loadVerifications();
   const v = map.get(hash);
   if (!v || v.bondId !== bondId || v.consumed) return false;
   v.consumed = true;
-  persistVerifications(map);
+  try {
+    persistVerifications(map);
+  } catch (error) {
+    // Not durably consumed → don't serve it (a restart would let it redeem
+    // again). Roll back so a retry after the disk recovers still works.
+    v.consumed = false;
+    throw error;
+  }
   return true;
 }

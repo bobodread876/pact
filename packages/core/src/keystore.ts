@@ -2,7 +2,7 @@
 // machine under ~/.pact (mode 600). Architecture §6 — later swappable for OS
 // keychain / NIP-46 remote signer / hardware.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,9 +32,18 @@ export interface PublicIdentity {
   npub: string;
   pubkeyHex: string;
   created: boolean;
+  /** When `force` replaced a key: where the previous identity was moved. */
+  backup?: string;
 }
 
-/** Create an identity if none exists (or if force), persist it 0600, return public parts. */
+/**
+ * Create an identity if none exists (or if force), persist it 0600, return public parts.
+ *
+ * `force` never destroys a key: the current identity.json is first moved
+ * aside to identity.<unix>.bak (0600), so every bond made with it stays
+ * recoverable. The new key is written to a temp file and renamed into place,
+ * so a crash can't leave a half-written identity.
+ */
 export function ensureIdentity(force = false): PublicIdentity {
   if (hasIdentity() && !force) {
     const id = loadIdentity();
@@ -46,9 +55,19 @@ export function ensureIdentity(force = false): PublicIdentity {
   } catch {
     /* best effort */
   }
+  let backup: string | undefined;
+  if (hasIdentity()) {
+    backup = join(pactHome(), `identity.${Math.floor(Date.now() / 1000)}.bak`);
+    for (let n = 1; existsSync(backup); n++) backup = join(pactHome(), `identity.${Math.floor(Date.now() / 1000)}-${n}.bak`);
+    renameSync(identityPath(), backup);
+    chmodSync(backup, 0o600);
+  }
   const keypair = generateNostrKeypair();
-  writeFileSync(identityPath(), JSON.stringify(keypair, null, 2) + '\n', { mode: 0o600 });
-  return { did: keypair.did, npub: keypair.npub, pubkeyHex: keypair.pubkeyHex, created: true };
+  const tmp = `${identityPath()}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(keypair, null, 2) + '\n', { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, identityPath());
+  return { did: keypair.did, npub: keypair.npub, pubkeyHex: keypair.pubkeyHex, created: true, ...(backup ? { backup } : {}) };
 }
 
 export function loadSecret(): Uint8Array {

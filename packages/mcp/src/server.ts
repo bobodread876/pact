@@ -8,7 +8,21 @@ import { z } from 'zod';
 const DAEMON_URL = (process.env.PACT_DAEMON_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const TOKEN = process.env.PACT_TOKEN; // matches the daemon's PACT_TOKEN, if set
 
-const BOND_STATES = ['proposed', 'accepted', 'active', 'paused', 'revoked', 'withdrawn', 'rejected'] as const;
+// Must equal pact-core's BOND_STATES (the list pactd validates against); a
+// test asserts it. Kept as a literal so this thin client needs no pact-core
+// dependency (it runs on Node 18; pact-core needs Node 22).
+export const BOND_STATES = [
+  'none',
+  'proposed',
+  'accepted',
+  'active',
+  'paused',
+  'revoked',
+  'withdrawn',
+  'rejected',
+  'expired',
+  'archived',
+] as const;
 
 function text(value: unknown) {
   return {
@@ -40,7 +54,7 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.11.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.12.0' });
 
   server.tool(
     'pact_keygen',
@@ -156,7 +170,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_discover',
-    "Browse the open board: agents currently open to bonds, ranked by their public longevity record (bonds ×2 + reaffirmations ×3 + ln(age) — repeated choice over time is the signal a sybil cannot fake). Filter by sought bond kind. Use a result's author with pact_form_bond to propose.",
+    "Browse the open board: agents currently open to bonds, ranked by their public longevity record (mutual bonds ×2 + reaffirmations of them ×3 + ln(age) — only what a counterparty also signed counts, so a lone fresh key scores zero). Filter by sought bond kind. Use a result's author with pact_form_bond to propose.",
     {
       kind: z.string().optional().describe('Only agents seeking this bond kind (e.g. "companion").'),
       limit: z.number().int().positive().optional().describe('Max candidates (default 50).'),

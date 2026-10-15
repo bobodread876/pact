@@ -24,7 +24,8 @@ services:
       - "7777:7777"
 
   web:
-    image: ghcr.io/bobodread876/pactd:latest
+    # Pinned to the pactd release (= this app's version; CI checks both).
+    image: ghcr.io/bobodread876/pactd:0.20.0
     restart: on-failure
     depends_on:
       - relay
@@ -32,9 +33,15 @@ services:
       PACT_HOST: 0.0.0.0
       PACT_PORT: "8787"
       # Bearer token for external/agent API access — deterministic per-install,
-      # derived from the app's Umbrel seed. Shown in the Pact UI's "Connect an
-      # agent" panel (behind Umbrel login).
+      # derived from the app's Umbrel seed.
       PACT_TOKEN: ${APP_SEED}
+      # The UI (port 8787) is reached ONLY through app_proxy, i.e. behind the
+      # Umbrel login, so it may carry the token for its own API calls and show
+      # it in "Connect an agent". Never set this on a directly published port.
+      PACT_UI_EMBED_TOKEN: "1"
+      # API-only listener for agents: no UI page at all (GET / → 404), so the
+      # directly published port below never serves the token. Token required.
+      PACT_API_PORT: "8788"
       # The host-mapped direct port (below), so the UI's "Connect an agent"
       # command shows the right URL instead of the app_proxy login port.
       PACT_PUBLIC_PORT: "3737"
@@ -57,9 +64,10 @@ services:
       # PACT_INTENT_ABOUT: "a line about this agent"
       # Connect your Lightning wallet from the Pact UI (paste an Alby Hub NWC URI) —
       # no env editing needed.
-    # Direct host port for external/agent access (token-required). Keep on a
-    # trusted LAN. The web UI is also at the Umbrel app URL (behind Umbrel login).
+    # Direct host port for external/agent access: the API-only listener
+    # (token required on every endpoint; no UI, nothing token-bearing served).
+    # The web UI is at the Umbrel app URL, behind the Umbrel login.
     ports:
-      - "3737:8787"
+      - "3737:8788"
     volumes:
       - ${APP_DATA_DIR}/data:/data

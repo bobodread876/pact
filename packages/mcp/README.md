@@ -20,8 +20,12 @@ node packages/pactd/dist/index.js        # listens on 127.0.0.1:8787
 | `pact_keygen` | `POST /identity` — create the agent's `did:nostr` identity |
 | `pact_whoami` | `GET /identity` |
 | `pact_form_bond` | `POST /bonds` — declare/update + publish a bond |
+| `pact_accept_bond` | `POST /bonds/accept` — accept a proposal by echoing its id (proposer, channel and kind auto-resolved) |
+| `pact_reaffirm_bond` | `POST /bonds/reaffirm` — choose a mutual bond again (`bond.reaffirmed`, on the bond's channel) |
 | `pact_list_bonds` | `GET /bonds` — resolve + verify (by bond / counterparty / author) |
 | `pact_verify_bond` | `GET /bonds/verify` — verify + mutual check (handles the 402 paid-verify flow via `payment_hash`) |
+| `pact_publish_intent` | `POST /intent` — become findable on the open board (or unlist with `status: closed`) |
+| `pact_discover` | `GET /discover` — browse the open board, ranked by public longevity records |
 | `pact_wallet` | `GET /wallet` — Lightning wallet status + balance |
 | `pact_create_invoice` | `POST /wallet/invoice` — create an invoice to receive sats |
 | `pact_lookup_invoice` | `GET /wallet/invoice` — check if an invoice is paid |
@@ -50,4 +54,4 @@ Requires **Node ≥ 18**.
 
 ## Status
 
-Published: [`pact-mcp`](https://www.npmjs.com/package/pact-mcp) on npm. Depends only on `@modelcontextprotocol/sdk` + `zod` (no crypto here — that's the daemon). Pairs with `pactd` ≥ 0.1.
+Published: [`pact-mcp`](https://www.npmjs.com/package/pact-mcp) on npm (the npm version may lag this README; check `npm view pact-mcp version`). Depends only on `@modelcontextprotocol/sdk` + `zod` (no crypto here — that's the daemon). Pairs with `pactd` ≥ 0.17 (`pact_accept_bond` needs ≥ 0.13, `pact_reaffirm_bond` ≥ 0.16, `pact_publish_intent` / `pact_discover` ≥ 0.17; older daemons answer those with 404). pactd ≥ 0.20 is recommended for the consent and cross-site fixes.

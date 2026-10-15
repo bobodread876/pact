@@ -6,7 +6,6 @@
 import {
   DEFAULT_RELAYS,
   KIND_BOND_HISTORY,
-  KIND_GIFT_WRAP,
   buildBondHistoryEvent,
   buildPrivateBondHistoryEvents,
   keypairFromSecret,
@@ -20,16 +19,21 @@ import {
 } from '@mate-protocol/core';
 
 import { makeBondDocument } from './bond.js';
-import type { BondVisibility } from './index.js';
+import { PactError } from './errors.js';
+import { listBonds, verifyBond, type BondView, type BondVisibility } from './index.js';
+import { fetchInbox, listPrivateBonds } from './private.js';
 
 export const REAFFIRM_TYPE = 'bond.reaffirmed';
 
 export interface ReaffirmBondInput {
   bondId: string;
-  /** Counterparty identity (did:nostr / npub / hex). */
-  counterparty: string;
+  /** Counterparty identity (did:nostr / npub / hex). Omit to resolve it from the bond. */
+  counterparty?: string;
   relays?: string[];
-  /** Publish on the bond's channel: gift-wrapped when private. */
+  /**
+   * Omit to follow the bond's channel (gift-wrapped when private). Only when
+   * BOTH this and `counterparty` are passed is the bond lookup skipped.
+   */
   visibility?: BondVisibility;
 }
 
@@ -41,13 +45,47 @@ export interface ReaffirmBondResult {
   event: { id: string; relays: PublishResult[] };
 }
 
-/** Publish a `bond.reaffirmed` lifecycle event for an existing bond. */
+/**
+ * Publish a `bond.reaffirmed` lifecycle event for an existing bond.
+ *
+ * Unless both `counterparty` and `visibility` are given, the bond is resolved
+ * from this identity's own view (public sides + its private inbox): it must be
+ * mutual with this identity as a party, the counterparty comes from the pair,
+ * and the channel echoes this identity's own latest side. There is no public
+ * default — guessing "public" for a private bond would publish its id and the
+ * two parties' linkage on the open graph.
+ */
 export async function reaffirmBond(secret: Uint8Array, input: ReaffirmBondInput): Promise<ReaffirmBondResult> {
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
-  const visibility = input.visibility ?? 'public';
+  const selfHex = keypairFromSecret(secret).pubkeyHex;
+  let counterparty = input.counterparty;
+  let visibility = input.visibility;
+
+  if (!counterparty || !visibility) {
+    const verdict = await verifyBond(input.bondId, relays, {
+      secret,
+      parties: counterparty ? [counterparty] : [],
+    });
+    if (!verdict.mutual || !verdict.parties?.includes(selfHex)) {
+      throw new PactError(
+        'not_found',
+        `no mutual bond ${input.bondId} with this identity as a party on these relays — form or accept it first (or pass both counterparty and visibility)`,
+      );
+    }
+    const other = verdict.parties[0] === selfHex ? verdict.parties[1] : verdict.parties[0];
+    if (counterparty && pubkeyHexFromIdentity(counterparty) !== other) {
+      throw new PactError('conflict', `bond ${input.bondId} is with ${other}, not ${counterparty}`);
+    }
+    counterparty = counterparty ?? other;
+    const own = verdict.bonds
+      .filter((b) => b.author === selfHex && b.signature_valid)
+      .sort((a, b) => b.created_at - a.created_at)[0];
+    visibility = visibility ?? own.visibility;
+  }
+
   const at = new Date().toISOString();
   const subjectDid = keypairFromSecret(secret).did;
-  const doc = makeBondDocument(subjectDid, input.counterparty, {
+  const doc = makeBondDocument(subjectDid, counterparty, {
     bondId: input.bondId,
     state: 'active',
   });
@@ -84,6 +122,10 @@ export interface ReaffirmationView {
  * Resolve reaffirmations visible to this identity — public `bond.reaffirmed`
  * events it authored or that p-tag it, plus private ones in its encrypted
  * inbox — reduced to latest-per-(bond, author). One call covers a whole UI.
+ *
+ * Only reaffirmations of this identity's own bonds, by one of that bond's two
+ * parties, are kept: anyone can p-tag us with a `bond.reaffirmed` for any bond
+ * id, and that must not show up as "they chose this bond again".
  */
 export async function listReaffirmations(
   secret: Uint8Array,
@@ -91,15 +133,31 @@ export async function listReaffirmations(
 ): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[] }> {
   const selfHex = keypairFromSecret(secret).pubkeyHex;
 
-  const [mine, toward, wraps] = await Promise.all([
+  const [mine, toward, wraps, ownSides, privSides] = await Promise.all([
     resolveEvents(relays, { kinds: [KIND_BOND_HISTORY], '#t': [REAFFIRM_TYPE], authors: [selfHex], limit: 200 }),
     resolveEvents(relays, { kinds: [KIND_BOND_HISTORY], '#t': [REAFFIRM_TYPE], '#p': [selfHex], limit: 200 }),
-    resolveEvents(relays, { kinds: [KIND_GIFT_WRAP], '#p': [selfHex], limit: 200 }),
+    fetchInbox(secret, relays),
+    listBonds({ authors: [selfHex] }, relays),
+    listPrivateBonds(secret, relays),
   ]);
+
+  // This identity's bonds, from its own sides: bond id → the counterparties it
+  // named. A reaffirmation counts only from self or from one of those.
+  const counterparties = new Map<string, Set<string>>();
+  for (const b of [...ownSides.bonds, ...privSides.bonds]) {
+    if (b.author !== selfHex || !b.bond || !b.counterparty || !b.signature_valid) continue;
+    const set = counterparties.get(b.bond) ?? new Set<string>();
+    set.add(b.counterparty);
+    counterparties.set(b.bond, set);
+  }
+  const isParty = (bondId: string, author: string) => {
+    const set = counterparties.get(bondId);
+    return Boolean(set && (author === selfHex || set.has(author)));
+  };
 
   const latest = new Map<string, ReaffirmationView>();
   const fold = (bondId: string | null, author: string, at: number, visibility: BondVisibility) => {
-    if (!bondId) return;
+    if (!bondId || !isParty(bondId, author)) return;
     const key = `${bondId}:${author}`;
     const prior = latest.get(key);
     if (prior) {
