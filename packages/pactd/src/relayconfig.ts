@@ -3,10 +3,10 @@
 // app) — no env/compose editing. Resolution order: relays.json > PACT_RELAYS env
 // > the protocol default relays.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { DEFAULT_RELAYS, pactHome } from 'pact-core';
+import { DEFAULT_RELAYS, pactHome, writeSecretFile } from 'pact-core';
 
 function configPath(): string {
   return join(pactHome(), 'relays.json');
@@ -42,8 +42,7 @@ function loadSaved(): string[] | undefined {
 }
 
 export function saveRelays(relays: string[]): void {
-  mkdirSync(pactHome(), { recursive: true });
-  writeFileSync(configPath(), JSON.stringify({ relays }), { mode: 0o600 });
+  writeSecretFile(configPath(), JSON.stringify({ relays }));
 }
 
 /** Whether relays were set via the UI/config (vs falling back to env/defaults). */

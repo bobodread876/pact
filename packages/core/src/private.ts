@@ -83,12 +83,13 @@ export async function listPrivateBonds(
   secret: Uint8Array,
   relays: string[],
   filter: PrivateBondFilter = {},
-): Promise<{ relaysReached: string[]; bonds: BondView[] }> {
+): Promise<{ relaysReached: string[]; bonds: BondView[]; truncated: boolean }> {
   const selfHex = keypairFromSecret(secret).pubkeyHex;
+  const limit = 200;
   const { events, relaysReached } = await resolveEvents(relays, {
     kinds: [KIND_GIFT_WRAP],
     '#p': [selfHex],
-    limit: 200,
+    limit,
   });
 
   const authorHex = filter.author ? pubkeyHexFromIdentity(filter.author) : null;
@@ -118,5 +119,7 @@ export async function listPrivateBonds(
   }
 
   const bonds = [...latest.values()].sort((a, b) => b.created_at - a.created_at);
-  return { relaysReached, bonds };
+  // A merged wrap window at the limit may be crowded (honest wraps pushed out),
+  // the same crowding signal listBonds reports for the public side.
+  return { relaysReached, bonds, truncated: events.length >= limit };
 }

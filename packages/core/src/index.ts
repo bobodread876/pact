@@ -211,8 +211,9 @@ export interface VerifyBondResult {
   /** Both sides' latest signed states cross-reference each other and are live. */
   mutual: boolean;
   /**
-   * The public side of the query hit a relay's result limit — the event window
-   * may be incomplete (crowding), so treat the verdict as inconclusive.
+   * Either side of the query (public or private) hit a relay's result limit —
+   * the event window may be incomplete (crowding), so treat the verdict as
+   * inconclusive.
    */
   truncated: boolean;
   /** True when any side of the bond arrived via the private transport. */
@@ -249,10 +250,12 @@ export async function verifyBond(
 
   let merged = bonds;
   let reached = relaysReached;
+  let crowded = truncated;
   if (options.secret) {
     const priv = await listPrivateBonds(options.secret, relays, { bondId });
     merged = [...bonds, ...priv.bonds];
     reached = [...new Set([...relaysReached, ...priv.relaysReached])];
+    crowded = crowded || priv.truncated;
   }
 
   const mutual = computeMutual(merged, bondId);
@@ -262,7 +265,7 @@ export async function verifyBond(
     relaysReached: reached,
     count: merged.length,
     mutual,
-    truncated,
+    truncated: crowded,
     ...(anyPrivate ? { private: true } : {}),
     bonds: merged,
   };
