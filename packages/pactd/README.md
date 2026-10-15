@@ -38,6 +38,8 @@ Requires **Node >= 22** (pactd uses the global `WebSocket`).
 | `PACT_VERIFY_PRICE_SATS` | `0` | paid-verification price; 0 = free |
 | `PACT_VERIFY_MAX_PENDING` | `200` | most unpaid, unexpired verification invoices outstanding at once; past it → 429 |
 | `PACT_VERIFY_INVOICES_PER_MIN` | `10` | new verification invoices one client address may request per minute (unauthenticated callers); past it → 429 |
+| `PACT_VERIFY_MAX_PENDING_PER_CLIENT` | `3` | unpaid, unexpired verification invoices one client address may hold at once, so one address can't fill the pool and lock other buyers out; past it → 429. The authenticated operator is exempt from both pending caps |
+| `PACT_TRUSTED_PROXY` | unset | set to `1` when pactd sits behind a reverse proxy or tunnel you control: the per-client limits then key on the first `X-Forwarded-For` address instead of the proxy's socket address (which would make every client share one limit). Never set it when clients can reach pactd directly, since they could then forge the header |
 | `PACT_INTENT_SEEKING` / `PACT_INTENT_ABOUT` | unset | opt-in install-time bond intent (see below) |
 
 Persisted files in `PACT_HOME`: `identity.json` (the key; `identity.<unix>.bak` after a forced replace), `token`, `relays.json`, `wallet.json`, `intent-closed.json`, `payments.json`, `verifications.json`.
@@ -127,7 +129,7 @@ curl -si "verifier.example:8787/bonds/verify?bond_id=X&payment_hash=<hash>"
 #    → 200 { paid:true, mutual, parties, bonds, … }
 ```
 
-Guarantees: each invoice is **bound to one `bond_id`**, **single-use**, and **persisted** (`verifications.json`, written atomically; if it can't be written the request fails rather than serving an unrecorded redemption, so a restart can't replay it). An invoice counts as paid only when the wallet reports it **settled** (a preimage alone proves nothing for an incoming invoice). Invoices are issued with a one-hour expiry; unredeemed entries are pruned a day after that, redeemed ones are kept. Issuing is bounded (`PACT_VERIFY_MAX_PENDING`, `PACT_VERIFY_INVOICES_PER_MIN`), so anonymous requests can't flood the operator's wallet history or the ledger. The ledger is per-node, not a shared macaroon scheme.
+Guarantees: each invoice is **bound to one `bond_id`**, **single-use**, and **persisted** (`verifications.json`, written atomically; if it can't be written the request fails rather than serving an unrecorded redemption, so a restart can't replay it). An invoice counts as paid only when the wallet reports it **settled** (a preimage alone proves nothing for an incoming invoice). Invoices are issued with a one-hour expiry; unredeemed entries are pruned a day after that, redeemed ones are kept. Issuing is bounded (`PACT_VERIFY_MAX_PENDING`, `PACT_VERIFY_INVOICES_PER_MIN`, `PACT_VERIFY_MAX_PENDING_PER_CLIENT`), so anonymous requests can't flood the operator's wallet history or the ledger, and one address can't hold the whole pool; the operator's own verifications are never blocked by strangers' unpaid invoices. Behind a proxy, set `PACT_TRUSTED_PROXY=1` so the per-client limits see real client addresses. The ledger is per-node, not a shared macaroon scheme.
 
 This first cut ships the **rail + primitives** (invoice / pay / lookup / balance) plus **paid verification**. The other markets above build on these.
 

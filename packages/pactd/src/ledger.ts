@@ -57,6 +57,8 @@ interface VerificationInvoice {
   consumed: boolean;
   /** When the invoice was issued (ms since epoch). Absent on pre-0.20.1 entries. */
   issuedAt?: number;
+  /** Client address the invoice was issued to (per-client pending cap). Absent on older entries. */
+  client?: string;
 }
 
 /** Expiry requested for verification invoices (seconds). */
@@ -116,18 +118,30 @@ function pruneVerifications(map: Map<string, VerificationInvoice>, now: number):
 
 /** Unredeemed verification invoices that can still be paid (issued within the expiry). */
 export function pendingVerificationCount(now = Date.now()): number {
+  return pendingVerificationCountFor(undefined, now);
+}
+
+/**
+ * Unredeemed, unexpired invoices issued to one client address — or to anyone
+ * when `client` is undefined. One address may hold only a small share of the
+ * global pool, so it can't lock every other buyer out by filling it.
+ */
+export function pendingVerificationCountFor(client: string | undefined, now = Date.now()): number {
   let n = 0;
   for (const v of loadVerifications().values()) {
-    if (!v.consumed && (v.issuedAt === undefined || now - v.issuedAt <= VERIFICATION_INVOICE_EXPIRY_SECS * 1000)) n++;
+    if (v.consumed) continue;
+    if (v.issuedAt !== undefined && now - v.issuedAt > VERIFICATION_INVOICE_EXPIRY_SECS * 1000) continue;
+    if (client !== undefined && v.client !== client) continue;
+    n++;
   }
   return n;
 }
 
 /** Record an invoice issued to gate verification of a specific bond. */
-export function recordVerificationInvoice(hash: string, bondId: string, now = Date.now()): void {
+export function recordVerificationInvoice(hash: string, bondId: string, now = Date.now(), client?: string): void {
   const map = loadVerifications();
   if (map.has(hash)) return;
-  map.set(hash, { bondId, consumed: false, issuedAt: now });
+  map.set(hash, { bondId, consumed: false, issuedAt: now, ...(client ? { client } : {}) });
   try {
     persistVerifications(map);
   } catch (error) {

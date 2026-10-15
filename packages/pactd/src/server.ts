@@ -33,6 +33,7 @@ import {
   consumeVerification,
   ownsPaymentHash,
   pendingVerificationCount,
+  pendingVerificationCountFor,
   recordPaymentHash,
   recordVerificationInvoice,
   verificationStatus,
@@ -165,7 +166,26 @@ function positiveIntEnv(name: string, fallback: number): number {
 // address per minute. Past either → 429.
 const VERIFY_MAX_PENDING = positiveIntEnv('PACT_VERIFY_MAX_PENDING', 200);
 const VERIFY_INVOICES_PER_MIN = positiveIntEnv('PACT_VERIFY_INVOICES_PER_MIN', 10);
+// ...and at most this many unredeemed invoices held by one client at a time,
+// so a single address can't fill the global pool and lock every buyer out.
+// The authenticated operator is exempt from both pending caps: they can
+// always verify on their own node.
+const VERIFY_MAX_PENDING_PER_CLIENT = positiveIntEnv('PACT_VERIFY_MAX_PENDING_PER_CLIENT', 3);
+// Behind a reverse proxy or tunnel every request shares the proxy's socket
+// address, which would turn the per-client limits into one shared limit. Only
+// when the operator says the proxy is trusted do we key on X-Forwarded-For.
+const TRUSTED_PROXY = !['', '0', 'false'].includes((process.env.PACT_TRUSTED_PROXY ?? '').toLowerCase());
 const invoiceRequests = new Map<string, number[]>();
+
+/** The address the per-client limits key on. */
+function clientAddress(req: IncomingMessage): string {
+  if (TRUSTED_PROXY) {
+    const fwd = req.headers['x-forwarded-for'];
+    const first = (Array.isArray(fwd) ? fwd[0] : fwd ?? '').split(',')[0].trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress ?? 'unknown';
+}
 
 /** Sliding one-minute window per client address. True = allowed (and counted). */
 function takeInvoiceSlot(client: string, now = Date.now()): boolean {
@@ -323,7 +343,7 @@ export function createDaemon(options: DaemonOptions = {}) {
       // sides need this node's key, which is reserved for the operator.
       if (path === '/bonds/verify' && method === 'GET' && VERIFY_PRICE_SATS > 0) {
         const authed = authorized(req);
-        return await handleVerify(res, url, ln, { authed, client: req.socket.remoteAddress ?? 'unknown' });
+        return await handleVerify(res, url, ln, { authed, client: clientAddress(req) });
       }
 
       if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
@@ -520,7 +540,7 @@ export function createDaemon(options: DaemonOptions = {}) {
         });
       }
       if (path === '/bonds/verify' && method === 'GET') {
-        return await handleVerify(res, url, ln, { authed: true, client: req.socket.remoteAddress ?? 'unknown' });
+        return await handleVerify(res, url, ln, { authed: true, client: clientAddress(req) });
       }
 
       // --- wallet (non-custodial sats via NWC) ---
@@ -662,13 +682,19 @@ async function handleVerify(
     if (!paymentHash) {
       // Each invoice is a bearer token for one verification, so it is never
       // shared between requesters; issuing is bounded instead.
-      if (pendingVerificationCount() >= VERIFY_MAX_PENDING) {
-        res.setHeader('Retry-After', '60');
-        return json(res, 429, { error: 'too many unpaid verification invoices outstanding — retry later' });
-      }
-      if (!caller.authed && !takeInvoiceSlot(caller.client)) {
-        res.setHeader('Retry-After', '60');
-        return json(res, 429, { error: 'too many verification invoices requested — retry later' });
+      if (!caller.authed) {
+        if (pendingVerificationCountFor(caller.client) >= VERIFY_MAX_PENDING_PER_CLIENT) {
+          res.setHeader('Retry-After', '60');
+          return json(res, 429, { error: 'too many unpaid verification invoices outstanding for this client — pay or wait for them to expire' });
+        }
+        if (pendingVerificationCount() >= VERIFY_MAX_PENDING) {
+          res.setHeader('Retry-After', '60');
+          return json(res, 429, { error: 'too many unpaid verification invoices outstanding — retry later' });
+        }
+        if (!takeInvoiceSlot(caller.client)) {
+          res.setHeader('Retry-After', '60');
+          return json(res, 429, { error: 'too many verification invoices requested — retry later' });
+        }
       }
       const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`, VERIFICATION_INVOICE_EXPIRY_SECS);
       if (!inv.paymentHash) {
@@ -677,7 +703,7 @@ async function handleVerify(
       recordPaymentHash(inv.paymentHash);
       // Bind this invoice to this bond, single-use — see ledger.ts. Throws if
       // it can't be persisted: never hand out an invoice we can't honor.
-      recordVerificationInvoice(inv.paymentHash, bondId);
+      recordVerificationInvoice(inv.paymentHash, bondId, Date.now(), caller.authed ? undefined : caller.client);
       return json(res, 402, {
         error: 'payment required',
         price_sats: VERIFY_PRICE_SATS,

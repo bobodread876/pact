@@ -245,15 +245,55 @@ describe('anonymous invoice issuing is bounded', () => {
       const anon = [];
       for (let i = 0; i < 4; i++) anon.push((await call(d.base, 'GET', q())).status);
       expect(anon).toEqual([402, 402, 402, 429]);
-      // The operator isn't rate limited, but the global pending cap (5) holds.
+      // The operator is exempt from the rate limit and from the pending caps:
+      // they can always verify on their own node.
       const op = [];
-      for (let i = 0; i < 3; i++) op.push((await call(d.base, 'GET', q(), { auth: true })).status);
-      expect(op).toEqual([402, 402, 429]);
+      for (let i = 0; i < 4; i++) op.push((await call(d.base, 'GET', q(), { auth: true })).status);
+      expect(op).toEqual([402, 402, 402, 402]);
     } finally {
       await d.close();
       rmSync(subHome, { recursive: true, force: true });
       delete process.env.PACT_VERIFY_INVOICES_PER_MIN;
       delete process.env.PACT_VERIFY_MAX_PENDING;
+    }
+  });
+
+  it('one client can hold only its share of the pending pool; others still get invoices', async () => {
+    const subHome = mkdtempSync(join(tmpdir(), 'pact-http-share-'));
+    const wallet = stubWallet();
+    const d = await startDaemon(
+      {
+        PACT_HOME: subHome,
+        PACT_RELAYS: relay.url,
+        PACT_TOKEN: TOKEN,
+        PACT_VERIFY_PRICE_SATS: '5',
+        PACT_VERIFY_INVOICES_PER_MIN: '100',
+        PACT_VERIFY_MAX_PENDING: '5',
+        PACT_VERIFY_MAX_PENDING_PER_CLIENT: '2',
+        PACT_TRUSTED_PROXY: '1', // key clients on X-Forwarded-For so the test can be several clients
+        PACT_ALLOWED_HOSTS: undefined,
+      },
+      { lightning: wallet.provider },
+    );
+    try {
+      const q = () => `/bonds/verify?bond_id=${encodeURIComponent(newBondId())}`;
+      const as = (ip: string) => ({ headers: { 'x-forwarded-for': `${ip}, 10.0.0.1` } });
+      // Client A fills its share (2) and is refused on the third, with the pool far from full.
+      const a = [];
+      for (let i = 0; i < 3; i++) a.push((await call(d.base, 'GET', q(), as('203.0.113.7'))).status);
+      expect(a).toEqual([402, 402, 429]);
+      // Client B is unaffected by A's holdings.
+      expect((await call(d.base, 'GET', q(), as('203.0.113.8'))).status).toBe(402);
+      expect((await call(d.base, 'GET', q(), as('203.0.113.8'))).status).toBe(402);
+      // Pool is now 4/5. C takes the last slot; D hits the global cap.
+      expect((await call(d.base, 'GET', q(), as('203.0.113.9'))).status).toBe(402);
+      expect((await call(d.base, 'GET', q(), as('203.0.113.10'))).status).toBe(429);
+      // The operator is never locked out by strangers' unpaid invoices.
+      expect((await call(d.base, 'GET', q(), { auth: true })).status).toBe(402);
+    } finally {
+      await d.close();
+      rmSync(subHome, { recursive: true, force: true });
+      for (const k of ['PACT_VERIFY_INVOICES_PER_MIN', 'PACT_VERIFY_MAX_PENDING', 'PACT_VERIFY_MAX_PENDING_PER_CLIENT', 'PACT_TRUSTED_PROXY']) delete process.env[k];
     }
   });
 });
