@@ -19,7 +19,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import * as secp256k1 from '@noble/secp256k1';
 import { bech32 } from '@scure/base';
 
-import { finalizeEvent, keypairFromSecret, type NostrEvent, type UnsignedEvent } from 'pact-core';
+import { finalizeEvent, keypairFromSecret, verifyEvent, type NostrEvent, type UnsignedEvent } from 'pact-core';
 
 secp256k1.hashes.sha256 = sha256;
 
@@ -159,9 +159,23 @@ export class NwcProvider implements LightningProvider {
     try {
       const r = await this.request('pay_invoice', params);
       if (r.preimage) {
+        // A preimage is only proof of payment if sha256(preimage) equals the
+        // invoice's payment hash — anything else is a wallet violation and
+        // must not read as settled.
+        const preimage = String(r.preimage);
+        if (paymentHash && !preimageMatchesHash(preimage, paymentHash)) {
+          return {
+            status: 'pending',
+            paymentHash,
+            error: 'wallet returned a preimage whose sha256 does not match the invoice payment hash',
+            message:
+              'Payment outcome is UNCONFIRMED — the wallet returned a preimage that does not satisfy this invoice. ' +
+              'DO NOT retry (re-paying may double-spend). Check pact_list_transactions or your wallet for the final status.',
+          };
+        }
         return {
           status: 'settled',
-          preimage: String(r.preimage),
+          preimage,
           feesPaidSats: r.fees_paid != null ? Math.floor(Number(r.fees_paid) / 1000) : undefined,
           paymentHash,
         };
@@ -209,7 +223,14 @@ export class NwcProvider implements LightningProvider {
       await delay(delayMs);
       try {
         const txs = await this.listTransactions({ limit: 30 });
-        const tx = txs.find((t) => t.paymentHash === paymentHash && t.settledAt != null);
+        // settledAt is normalized (null unless a positive timestamp); when a
+        // preimage is present it must satisfy the payment hash.
+        const tx = txs.find(
+          (t) =>
+            t.paymentHash === paymentHash &&
+            t.settledAt != null &&
+            (!t.preimage || preimageMatchesHash(t.preimage, paymentHash)),
+        );
         if (tx) return tx;
       } catch {
         // keep polling
@@ -221,6 +242,19 @@ export class NwcProvider implements LightningProvider {
   async lookupInvoice(opts: { invoice?: string; paymentHash?: string }): Promise<{ paid: boolean } & Record<string, unknown>> {
     const params = opts.paymentHash ? { payment_hash: opts.paymentHash } : { invoice: opts.invoice };
     const r = await this.request('lookup_invoice', params);
+    // Settlement evidence, not settlement claims: invoicePaid checks state/
+    // settled_at (and preimage for outgoing). A settled answer about a
+    // DIFFERENT invoice than the one queried is a wallet/relay mixup —
+    // never let it stand in as proof of payment here.
+    const queriedHash = opts.paymentHash ?? (opts.invoice ? paymentHashFromInvoice(opts.invoice) : null);
+    if (
+      invoicePaid(r) &&
+      queriedHash &&
+      typeof r.payment_hash === 'string' &&
+      r.payment_hash !== queriedHash
+    ) {
+      throw new Error('NWC lookup_invoice answered for a different payment hash than queried');
+    }
     return { ...r, paid: invoicePaid(r) };
   }
 
@@ -234,7 +268,10 @@ export class NwcProvider implements LightningProvider {
       description: t.description || undefined,
       paymentHash: t.payment_hash || undefined,
       preimage: t.preimage || undefined,
-      settledAt: t.settled_at ?? null,
+      // Normalize settlement: only a positive timestamp counts — a wallet that
+      // reports settled_at: 0 (epoch) is reporting "not settled", and `!= null`
+      // alone would read it as paid.
+      settledAt: typeof t.settled_at === 'number' && t.settled_at > 0 ? t.settled_at : null,
       createdAt: t.created_at,
     }));
   }
@@ -253,13 +290,23 @@ export class NwcProvider implements LightningProvider {
     const reqEvent = finalizeEvent(unsigned, secret);
     const respEvent = await this.roundtrip(reqEvent, ourPubkey);
     const decrypted = nip04Decrypt(respEvent.content, secret, walletPubkey);
-    const parsed = JSON.parse(decrypted) as { result_type?: string; error?: { code: string; message: string }; result?: Record<string, any> };
+    const parsed = JSON.parse(decrypted) as {
+      result_type?: string;
+      error?: { code: string; message: string };
+      result?: Record<string, any>;
+    };
+    // The decrypted document must be the wallet's answer to THIS method — a
+    // result about anything else means the response wasn't written for this
+    // request, even when the envelope and signature check out.
+    if (parsed.result_type !== method) {
+      throw new Error(`NWC response result_type mismatch (expected ${method}, got ${parsed.result_type ?? 'none'})`);
+    }
     if (parsed.error) throw new Error(`NWC ${parsed.error.code}: ${parsed.error.message}`);
     return parsed.result ?? {};
   }
 
   private roundtrip(reqEvent: NostrEvent, ourPubkey: string, timeoutMs = 30000): Promise<NostrEvent> {
-    const { relay } = this.conn;
+    const { relay, walletPubkey } = this.conn;
     return new Promise((resolve, reject) => {
       const sub = `nwc-${reqEvent.id.slice(0, 12)}`;
       let done = false;
@@ -290,7 +337,18 @@ export class NwcProvider implements LightningProvider {
           return;
         }
         if (Array.isArray(msg) && msg[0] === 'EVENT' && msg[1] === sub && msg[2]) {
-          finish(() => resolve(msg[2] as NostrEvent));
+          const event = msg[2] as NostrEvent;
+          // Authenticate the envelope at the wire. Relays serve whatever
+          // matches the filter — including a forged response (spoofed wallet
+          // pubkey, junk signature, correct #e) carrying ciphertext captured
+          // from an EARLIER settled request. Only a response authored by our
+          // wallet, bound by #e to this request id, with a valid Schnorr
+          // signature over a well-formed id, counts.
+          if (event.kind !== NWC_RESPONSE_KIND) return;
+          if (event.pubkey !== walletPubkey) return;
+          if (!event.tags.some((t) => t[0] === 'e' && t[1] === reqEvent.id)) return;
+          if (!verifyEvent(event)) return;
+          finish(() => resolve(event));
         }
       });
     });
@@ -348,6 +406,13 @@ function hexToBytes(hex: string): Uint8Array {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** A 64-hex preimage is proof of a payment only if its sha256 equals the payment hash. */
+function preimageMatchesHash(preimage: string, paymentHash: string): boolean {
+  if (!/^[0-9a-fA-F]{64}$/.test(preimage)) return false;
+  const digest = Buffer.from(sha256(hexToBytes(preimage.toLowerCase()))).toString('hex');
+  return digest === paymentHash.toLowerCase();
 }
 
 // --- bolt11 payment-hash extraction ----------------------------------------
