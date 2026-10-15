@@ -121,6 +121,9 @@ export interface FormBondResult {
   };
 }
 
+/** Last created_at this process stamped per (author, bond), on either channel. */
+const lastStamp = new Map<string, number>();
+
 /** Assemble, sign, and publish a bond state (and optional history) from a secret key. */
 export async function formBond(secret: Uint8Array, input: FormBondInput): Promise<FormBondResult> {
   const subjectDid = keypairFromSecret(secret).did;
@@ -136,18 +139,26 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
   // Relays keep the newest side per (author, d) and readers break a same-second
   // tie by lowest id, so a quick follow-up (propose → withdraw) could lose the
   // tie to the side it is meant to replace. Stamp strictly after this author's
-  // current side on EITHER channel (a bond may move between them, §13.7).
+  // current side. The same-second case is one process writing twice, so a
+  // process-local stamp per (author, bond) covers it on both channels without
+  // reading the (public-write, floodable) inbox on every write. The public
+  // prior is one cheap addressable query; the inbox is read only for a
+  // private write whose bond this process has not stamped yet (e.g. after a
+  // restart), so a flooded inbox can't slow down public writes at all.
   const selfHex = keypairFromSecret(secret).pubkeyHex;
-  const [publicPrior, privatePrior] = await Promise.all([
-    listBonds({ authors: [selfHex], '#d': [bondId], limit: 5 }, relays).catch(() => null),
-    listPrivateBonds(secret, relays, { bondId, author: selfHex }).catch(() => null),
-  ]);
-  const priorAt = Math.max(
-    0,
+  const stampKey = `${selfHex}:${bondId}`;
+  const publicPrior = await listBonds({ authors: [selfHex], '#d': [bondId], limit: 5 }, relays).catch(() => null);
+  let priorAt = Math.max(
+    lastStamp.get(stampKey) ?? 0,
     ...(publicPrior?.bonds ?? []).filter((b) => b.author === selfHex).map((b) => b.created_at),
-    ...(privatePrior?.bonds ?? []).map((b) => b.created_at),
   );
+  if (input.visibility === 'private' && !lastStamp.has(stampKey)) {
+    const privatePrior = await listPrivateBonds(secret, relays, { bondId, author: selfHex }).catch(() => null);
+    priorAt = Math.max(priorAt, ...(privatePrior?.bonds ?? []).map((b) => b.created_at));
+  }
   if (priorAt >= createdAt) createdAt = priorAt + 1;
+  lastStamp.set(stampKey, createdAt);
+  if (lastStamp.size > 10_000) lastStamp.delete(lastStamp.keys().next().value as string);
 
   if (input.visibility === 'private') {
     // Rumors are unsigned — the embedded proof is the bond's authorship
@@ -264,6 +275,12 @@ export interface VerifyBondResult {
   parties?: [string, string];
   /** True when any side of the bond arrived via the private transport. */
   private?: boolean;
+  /**
+   * True when this node's private inbox could not be read to the end (a
+   * flooded second or the page budget), so private sides may be missing.
+   * `mutual` is forced false then: a hidden revocation must not verify.
+   */
+  inboxTruncated?: boolean;
   /** Every side seen (latest per author + channel), including ones that did not count. */
   bonds: BondView[];
   /** Sides that failed verification; reported, never counted. */
@@ -340,10 +357,12 @@ export async function verifyBond(
     for (const r of fetched.relaysReached) reached.add(r);
   }
 
+  let inboxTruncated = false;
   if (options.secret) {
     const priv = await listPrivateBonds(options.secret, relays, { bondId });
     sides = [...sides, ...priv.bonds];
     for (const r of priv.relaysReached) reached.add(r);
+    inboxTruncated = priv.truncated;
   }
 
   // Dedupe (several queries return the same events), then latest per
@@ -362,7 +381,9 @@ export async function verifyBond(
     bondId,
     relaysReached: [...reached],
     count: bonds.length,
-    mutual: pair !== null,
+    // An incomplete inbox can hide a revocation: never report mutual on one.
+    mutual: pair !== null && !inboxTruncated,
+    ...(inboxTruncated ? { inboxTruncated: true } : {}),
     ...(pair ? { parties: pair.parties } : {}),
     ...(anyPrivate ? { private: true } : {}),
     bonds,
@@ -414,10 +435,19 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
     { '#d': [input.bondId], '#p': [selfHex], ...(counterpartyFilter ? { authors: counterpartyFilter } : {}) },
     relays,
   );
-  const { bonds: privateBonds } = await listPrivateBonds(secret, relays, {
+  const { bonds: privateBonds, truncated } = await listPrivateBonds(secret, relays, {
     bondId: input.bondId,
     counterparty: selfHex,
   });
+  if (truncated) {
+    // Part of the inbox could not be read (a flooded second, or the page
+    // budget). The proposer's current state may be hiding in what was skipped
+    // — a withdrawal, say — so accepting now would act on a partial history.
+    throw new PactError(
+      'conflict',
+      `inbox incomplete on these relays — could not read the full private history for bond ${input.bondId}; nothing accepted. Retry later or against a relay with a smaller inbox`,
+    );
+  }
   const inbound = [...publicBonds, ...privateBonds].filter((b) => b.author !== selfHex && b.signature_valid);
   const proposers = [...new Set(inbound.map((b) => b.author))];
 

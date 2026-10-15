@@ -226,6 +226,33 @@ describe('acceptBond: consent and channel', () => {
     await expect(acceptBond(bob, { bondId, relays })).rejects.toThrow(/is withdrawn/);
   });
 
+  it('more than a page of wraps in one second never hides a withdrawal: the read is flagged incomplete and nothing is accepted', async () => {
+    const a = await startMockRelay();
+    try {
+      const bondId = newBondId();
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', visibility: 'private', relays: [a.url] });
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'withdrawn', visibility: 'private', relays: [a.url] });
+      // 201 wraps p-tagging Bob, all in ONE second newer than the bond: page 1
+      // is 200 of them, and `until = that second` returns the same 200 again.
+      const t = Math.floor(Date.now() / 1000) + 60;
+      for (let i = 0; i < 201; i++) {
+        const junkKey = fresh();
+        await publishEvent([a.url], finalizeEvent({ pubkey: keypairFromSecret(junkKey).pubkeyHex, created_at: t, kind: 1059, tags: [['p', bobHex]], content: 'x' }, junkKey));
+      }
+      const inbox = await listPrivateBonds(bob, [a.url], { bondId });
+      expect(inbox.truncated).toBe(true);
+      // Stepping past the saturated second still reaches the older history…
+      expect(inbox.bonds.map((x) => x.state)).toEqual(['withdrawn']);
+      // …but an incomplete inbox is never accepted on, whatever it shows.
+      await expect(acceptBond(bob, { bondId, relays: [a.url] })).rejects.toThrow(/inbox incomplete|is withdrawn/);
+      const v = await verifyBond(bondId, [a.url], { secret: bob });
+      expect(v.inboxTruncated).toBe(true);
+      expect(v.mutual).toBe(false);
+    } finally {
+      await a.close();
+    }
+  }, 60_000);
+
   it('a withdrawal on one relay is seen even when another relay is flooded with skewed history', async () => {
     // Relay A: Alice's proposal AND her withdrawal, plus 200 fresh junk wraps on top.
     // Relay B: only the proposal, plus 200 wraps backdated 49 days. A shared

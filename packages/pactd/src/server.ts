@@ -203,9 +203,14 @@ function clientAddress(req: IncomingMessage): string {
     const raw = Array.isArray(fwd) ? fwd.join(',') : fwd ?? '';
     const last = raw.split(',').map((s) => s.trim()).filter(Boolean).pop();
     if (last) return clientBucket(last);
+    if (!warnedNoForwardedFor) {
+      warnedNoForwardedFor = true;
+      process.stderr.write('pactd: PACT_TRUSTED_PROXY is set but a request arrived without X-Forwarded-For — per-client limits fall back to the socket address (every client shares one bucket). Is the proxy in front?\n');
+    }
   }
   return clientBucket(req.socket.remoteAddress ?? 'unknown');
 }
+let warnedNoForwardedFor = false;
 
 /** Sliding one-minute window per client address. True = allowed (and counted). */
 function takeInvoiceSlot(client: string, now = Date.now(), limit = VERIFY_INVOICES_PER_MIN): boolean {

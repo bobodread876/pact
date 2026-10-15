@@ -37,10 +37,15 @@ const INBOX_MAX_PAGES = 50;
 export async function fetchInbox(
   secret: Uint8Array,
   relays: string[],
-): Promise<{ relaysReached: string[]; events: NostrEvent[] }> {
+): Promise<{ relaysReached: string[]; events: NostrEvent[]; truncated: boolean }> {
   const selfHex = keypairFromSecret(secret).pubkeyHex;
   const byId = new Map<string, NostrEvent>();
   const reached = new Set<string>();
+  // Set when any relay's history could not be read to the end: more than a
+  // page of wraps within one second (the cursor can't split a second), or the
+  // page budget ran out. Consumers must treat the inbox as incomplete then —
+  // a withdrawal may be hiding below — rather than act on what they got.
+  let truncated = false;
   // One cursor PER relay. A shared cursor takes the minimum created_at across
   // relays, so a relay whose first page only covered the last few minutes
   // would be asked for `until = <weeks ago>` next and everything in between
@@ -64,18 +69,25 @@ export async function fetchInbox(
           if (!byId.has(event.id)) byId.set(event.id, event);
           oldest = Math.min(oldest, event.created_at);
         }
-        // Stop when this relay's page is short (its history is exhausted) or
-        // the cursor can't advance (more than a page within one second).
+        // Stop when this relay's page is short (its history is exhausted).
         // `until` is inclusive, so events sharing the oldest second are
         // re-read, never lost; events already seen from another relay still
         // advance this relay's cursor.
         if (events.length < INBOX_PAGE || !Number.isFinite(oldest)) break;
-        if (until !== undefined && oldest >= until) break;
+        if (until !== undefined && oldest >= until) {
+          // A full page within one second: the cursor cannot advance through
+          // it. Step past that second so older history is still read, and
+          // flag the read — whatever else sat in that second is lost.
+          truncated = true;
+          until = oldest - 1;
+          continue;
+        }
         until = oldest;
+        if (page === INBOX_MAX_PAGES - 1) truncated = true;
       }
     }),
   );
-  return { relaysReached: [...reached], events: [...byId.values()] };
+  return { relaysReached: [...reached], events: [...byId.values()], truncated };
 }
 
 export interface PrivateBondFilter {
@@ -141,8 +153,8 @@ export async function listPrivateBonds(
   secret: Uint8Array,
   relays: string[],
   filter: PrivateBondFilter = {},
-): Promise<{ relaysReached: string[]; bonds: BondView[] }> {
-  const { events, relaysReached } = await fetchInbox(secret, relays);
+): Promise<{ relaysReached: string[]; bonds: BondView[]; truncated: boolean }> {
+  const { events, relaysReached, truncated } = await fetchInbox(secret, relays);
 
   const authorHex = filter.author ? pubkeyHexFromIdentity(filter.author) : null;
   const counterpartyHex = filter.counterparty ? pubkeyHexFromIdentity(filter.counterparty) : null;
@@ -161,5 +173,5 @@ export async function listPrivateBonds(
   // kind:1059 is a regular kind, so perform the replaceable reduction the relay
   // does for public kind:30317: latest per (author, bond).
   const bonds = latestPerKey(views, (v) => `${v.author}:${v.bond ?? v.id}`).sort((a, b) => b.created_at - a.created_at);
-  return { relaysReached, bonds };
+  return { relaysReached, truncated, bonds };
 }

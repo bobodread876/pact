@@ -34,13 +34,15 @@ function stubWallet() {
     payInvoice: async () => ({ status: 'failed', error: 'stub' }) as never,
     // Await like a real wallet round trip, so concurrent redemptions interleave.
     lookupInvoice: async ({ paymentHash }) => {
+      lookups += 1;
       await new Promise((r) => setTimeout(r, 50));
       return { paid: invoices.get(paymentHash ?? '')?.paid ?? false };
     },
     listTransactions: async () => [],
     getCapabilities: async () => ({ methods: [], backend: 'stub', canPayAmountless: false }),
   };
-  return { provider, pay: (hash: string) => invoices.set(hash, { paid: true }) };
+  let lookups = 0;
+  return { provider, pay: (hash: string) => invoices.set(hash, { paid: true }), lookups: () => lookups };
 }
 
 async function startDaemon(env: Record<string, string | undefined>, options: Record<string, unknown> = {}) {
@@ -354,6 +356,34 @@ describe('API-only listener', () => {
       expect((await call(d.base, 'GET', '/identity', { auth: true })).status).toBe(200);
     } finally {
       await d.close();
+    }
+  });
+});
+
+describe('anonymous redemption polling is throttled', () => {
+  it('an unpaid hash can be polled only a few times a minute; the operator is not throttled', async () => {
+    const subHome = mkdtempSync(join(tmpdir(), 'pact-http-redeem-'));
+    const wallet = stubWallet();
+    const d = await startDaemon(
+      { PACT_HOME: subHome, PACT_RELAYS: relay.url, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: '5', PACT_VERIFY_INVOICES_PER_MIN: '1', PACT_ALLOWED_HOSTS: undefined },
+      { lightning: wallet.provider },
+    );
+    try {
+      const q = `/bonds/verify?bond_id=${encodeURIComponent(newBondId())}`;
+      const { payment_hash: hash } = (await (await call(d.base, 'GET', q)).json()) as { payment_hash: string };
+      const polls = [];
+      for (let i = 0; i < 4; i++) polls.push((await call(d.base, 'GET', `${q}&payment_hash=${hash}`)).status);
+      // Redeem budget is 3× the issuance budget (1/min here): three wallet lookups, then 429.
+      expect(polls).toEqual([402, 402, 402, 429]);
+      expect(wallet.lookups()).toBe(3);
+      // The operator polls freely.
+      expect((await call(d.base, 'GET', `${q}&payment_hash=${hash}`, { auth: true })).status).toBe(402);
+      expect((await call(d.base, 'GET', `${q}&payment_hash=${hash}`, { auth: true })).status).toBe(402);
+      expect(wallet.lookups()).toBe(5);
+    } finally {
+      await d.close();
+      rmSync(subHome, { recursive: true, force: true });
+      delete process.env.PACT_VERIFY_INVOICES_PER_MIN;
     }
   });
 });
