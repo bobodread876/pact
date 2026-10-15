@@ -48,7 +48,7 @@ function out(json: boolean, human: string, data: unknown): void {
 }
 
 const INBOX_NOTE =
-  '\n  (inbox incomplete (flooded): the private inbox could not be read to the end — private sides may be missing)';
+  '\n  (inbox incomplete: the private inbox could not be read to the end — private sides may be missing)';
 /** Private inbox not served by some relays: a private side that landed only there was not seen. */
 const unreadNote = (relays?: string[]) => (relays && relays.length ? `\n  (private inbox not served by: ${relays.join(', ')})` : '');
 
@@ -259,7 +259,7 @@ async function main(): Promise<void> {
         const result = await pact.verifyBond(bondId);
         out(
           json,
-          `Bond '${bondId}': ${result.mutual ? 'MUTUAL ✓' : result.inboxTruncated ? 'not mutual: inbox incomplete (flooded)' : 'not mutual'} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).${unreadNote(result.inboxRelaysUnread)}\n${result.bonds.map(bondLine).join('\n')}`,
+          `Bond '${bondId}': ${result.mutual ? 'MUTUAL ✓' : result.inboxTruncated ? (result.inboxRelaysUnread && result.relaysReached.every((r) => result.inboxRelaysUnread!.includes(r)) ? 'not mutual: inbox incomplete (no relay served it)' : 'not mutual: inbox incomplete') : 'not mutual'} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).${unreadNote(result.inboxRelaysUnread)}\n${result.bonds.map(bondLine).join('\n')}`,
           result,
         );
         if (!result.mutual) process.exitCode = 1;

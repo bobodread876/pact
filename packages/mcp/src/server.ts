@@ -133,7 +133,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_list_bonds',
-    "Resolve relationship bonds via the daemon and verify each. Covers both transports: public signed events, plus private gift-wrapped bonds this agent can decrypt. Filter by bond id, counterparty, author, or visibility. With no filter, lists this agent's own bonds and full private inbox.",
+    "Resolve relationship bonds via the daemon and verify each. Covers both transports: public signed events, plus private gift-wrapped bonds this agent can decrypt. Filter by bond id, counterparty, author, or visibility. With no filter, lists this agent's own bonds and full private inbox. If the result has inboxTruncated, treat private sides as possibly missing (the inbox could not be read to the end); inboxRelaysUnread names relays whose inbox was never served (e.g. NIP-42 auth-required relays).",
     {
       bond_id: z.string().optional().describe('Match a specific bond id.'),
       counterparty: z.string().optional().describe('Match bonds toward this identity.'),
@@ -153,7 +153,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_verify_bond',
-    "Verify a bond via the daemon (signatures + mutual check). Private bond sides this agent can decrypt are included; to anyone without the key a private bond is invisible by design (verification of one is disclosure-mediated). If the daemon charges for verification it returns a Lightning invoice (status 402); pay it and call again with payment_hash.",
+    "Verify a bond via the daemon (signatures + mutual check). Private bond sides this agent can decrypt are included; to anyone without the key a private bond is invisible by design (verification of one is disclosure-mediated). inboxTruncated means this agent's inbox could not be read to the end: mutual is then forced false for its own bonds; inboxRelaysUnread names relays whose inbox was never served. If the daemon charges for verification it returns a Lightning invoice (status 402); pay it and call again with payment_hash.",
     {
       bond_id: z.string().describe('The bond id to verify.'),
       payment_hash: z.string().optional().describe('Payment hash of a paid invoice, to satisfy a paywalled verify.'),

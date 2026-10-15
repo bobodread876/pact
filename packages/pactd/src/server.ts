@@ -822,18 +822,25 @@ function startEventStream(req: IncomingMessage, res: ServerResponse, url: URL): 
         listPrivateBonds(loadSecret(), relays, { counterparty: self }),
       ]);
       const unreadKey = priv.inboxRelaysUnread.join(',');
-      if (priv.truncated || unreadKey !== lastUnreadKey) {
-        // Truncated: once per poll — a private change (a withdrawal, say) may
-        // be missing from this poll's events. Unread relays: whenever the set
-        // changes — a private side that landed only on one of them is unseen.
-        lastUnreadKey = unreadKey;
+      const unreadChanged = unreadKey !== lastUnreadKey;
+      lastUnreadKey = unreadKey;
+      if (priv.truncated) {
+        // Once per poll: the private inbox was only partly read, so a private
+        // change (a withdrawal, say) may be missing from this poll's events.
         res.write(
           `event: warning\ndata: ${JSON.stringify({
-            warning: priv.truncated ? 'inbox incomplete' : 'inbox not served by some relays',
-            ...(priv.truncated ? { inboxTruncated: true } : {}),
+            warning: 'inbox incomplete',
+            inboxTruncated: true,
             ...(priv.inboxRelaysUnread.length ? { inboxRelaysUnread: priv.inboxRelaysUnread } : {}),
           })}\n\n`,
         );
+      } else if (unreadChanged && priv.inboxRelaysUnread.length) {
+        // The set of relays that never serve the inbox changed: a private side
+        // that landed only on one of them is unseen. Said once per change.
+        res.write(`event: warning\ndata: ${JSON.stringify({ warning: 'inbox not served by some relays', inboxRelaysUnread: priv.inboxRelaysUnread })}\n\n`);
+      } else if (unreadChanged) {
+        // Every relay serves the inbox again — a recovery, not a warning.
+        res.write(`event: info\ndata: ${JSON.stringify({ info: 'inbox now served by all relays' })}\n\n`);
       }
       for (const b of [...pub.bonds, ...priv.bonds]) {
         const key = `${b.bond}:${b.author}:${b.visibility}`;

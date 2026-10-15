@@ -69,7 +69,7 @@ All endpoints except `/` and `/healthz` require `Authorization: Bearer <token>` 
 | `POST /intent` | `{ seeking, about?, profile?, relays? }` or `{ status: "closed" }` | publish this node's bond intent (become findable) or unlist |
 | `GET /intent` | `?relay=` | this node's current intent |
 | `GET /discover` | `?kind= &limit= &relay=` | the open board, ranked by public longevity records (mutual bonds only) |
-| `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes, public + private. `interval` is ms, min 5000, default 30000. One `event: warning` (`{ warning: "inbox incomplete", inboxTruncated: true }`) per poll whose private inbox read was partial, and one (`{ warning: "inbox not served by some relays", inboxRelaysUnread: [...] }`) whenever the set of relays that never serve the inbox changes |
+| `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes, public + private. `interval` is ms, min 5000, default 30000. One `event: warning` (`{ warning: "inbox incomplete", inboxTruncated: true }`) per poll whose private inbox read was partial, and one (`{ warning: "inbox not served by some relays", inboxRelaysUnread: [...] }`) whenever the set of relays that never serve the inbox changes; `event: info` (`{ info: "inbox now served by all relays" }`) when that set empties again |
 | `GET /wallet` | — | wallet connection status + balance (sats) |
 | `POST /wallet/connect` | `{ nwc }` | connect (and persist) an NWC wallet |
 | `POST /wallet/disconnect` | `{}` | disconnect; persisted, so a restart does not fall back to `PACT_NWC` |

@@ -265,7 +265,7 @@ export class Pact {
   /** Reaffirmations visible to this identity, latest-per-(bond, author). */
   listReaffirmations(
     relays?: string[],
-  ): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[]; truncated?: boolean }> {
+  ): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[]; truncated?: boolean; inboxRelaysUnread?: string[] }> {
     return coreListReaffirmations(this.secret, relays ?? this.relays);
   }
 

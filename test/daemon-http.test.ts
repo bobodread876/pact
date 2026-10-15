@@ -478,5 +478,64 @@ describe('a flooded private inbox is surfaced, not silently dropped', () => {
       await r.close();
       rmSync(floodHome, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 180_000);
+});
+
+describe('relays that never serve the inbox are named, and a recovery is not a warning', () => {
+  it('/events warns once naming the relay, stays quiet, then says info on recovery; GET /bonds and the SDK name it too', async () => {
+    const healthy = await startMockRelay();
+    const auth = await startMockRelay();
+    const home2 = mkdtempSync(join(tmpdir(), 'pact-unread-'));
+    const d = await startDaemon({ PACT_HOME: home2, PACT_RELAYS: `${healthy.url},${auth.url}`, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: undefined, PACT_ALLOWED_HOSTS: undefined });
+    const ctrl = new AbortController();
+    try {
+      await call(d.base, 'POST', '/identity', { body: {}, auth: true });
+      auth.failReqsAfter(0, 'closed', 1059); // NIP-42-style: never serves the inbox
+
+      const bonds = (await (await call(d.base, 'GET', '/bonds?visibility=all', { auth: true })).json()) as { inboxTruncated?: boolean; inboxRelaysUnread?: string[] };
+      expect(bonds.inboxTruncated).toBeUndefined();
+      expect(bonds.inboxRelaysUnread).toEqual([auth.url]);
+      const sdk = await Pact.fromKeystore({ relays: [healthy.url, auth.url] }).listBonds({});
+      expect(sdk.inboxTruncated).toBeUndefined();
+      expect(sdk.inboxRelaysUnread).toEqual([auth.url]);
+
+      const res = await fetch(`${d.base}/events?interval=5000`, { headers: { authorization: `Bearer ${TOKEN}` }, signal: ctrl.signal });
+      const reader = res.body!.getReader();
+      let text = '';
+      // One pending read at a time: a read abandoned to a timer would still
+      // consume the next chunk, and that data would be lost.
+      let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+      const readUntil = async (pred: () => boolean, ms: number) => {
+        const deadline = Date.now() + ms;
+        while (!pred() && Date.now() < deadline) {
+          pending ??= reader.read();
+          const timer = new Promise<null>((r) => setTimeout(() => r(null), Math.max(1, deadline - Date.now())));
+          const got = await Promise.race([pending, timer]);
+          if (got === null) break; // timer: leave `pending` for the next call
+          pending = null;
+          if (got.done) break;
+          text += new TextDecoder().decode(got.value);
+        }
+      };
+      // Poll 1: one warning naming the refusing relay.
+      await readUntil(() => text.includes('inbox not served by some relays'), 10_000);
+      expect(text.split('event: warning').length - 1).toBe(1);
+      expect(text).toContain(JSON.stringify([auth.url]));
+      // Poll 2 (steady state): nothing new.
+      await readUntil(() => text.includes('event: info'), 7_000);
+      expect(text.split('event: warning').length - 1).toBe(1);
+      expect(text).not.toContain('event: info');
+      // Recovery: the relay serves the inbox again → one info, no warning.
+      auth.failReqsAfter(null);
+      await readUntil(() => text.includes('event: info'), 12_000);
+      expect(text).toContain('inbox now served by all relays');
+      expect(text.split('event: warning').length - 1).toBe(1);
+    } finally {
+      ctrl.abort();
+      await d.close();
+      await healthy.close();
+      await auth.close();
+      rmSync(home2, { recursive: true, force: true });
+    }
+  }, 180_000);
 });

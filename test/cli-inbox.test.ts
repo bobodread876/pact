@@ -28,7 +28,7 @@ function pact(home: string, args: string[]): Promise<{ code: number | null; stdo
 }
 
 describe('pact CLI: a flooded inbox', () => {
-  it('accept refuses and names --allow-incomplete-inbox; the flag accepts; verify and list say "inbox incomplete (flooded)"', async () => {
+  it('accept refuses and names --allow-incomplete-inbox; the flag accepts; verify and list say "inbox incomplete"', async () => {
     const r = await startMockRelay();
     const home = mkdtempSync(join(tmpdir(), 'pact-cli-'));
     try {
@@ -56,10 +56,10 @@ describe('pact CLI: a flooded inbox', () => {
 
       const verify = await pact(home, ['bond', 'verify', bondId, ...rel]);
       expect(verify.code).toBe(1);
-      expect(verify.stdout).toContain('not mutual: inbox incomplete (flooded)');
+      expect(verify.stdout).toContain('not mutual: inbox incomplete');
 
       const list = await pact(home, ['bond', 'list', '--visibility', 'private', ...rel]);
-      expect(list.stdout).toContain('inbox incomplete (flooded)');
+      expect(list.stdout).toContain('inbox incomplete');
     } finally {
       await r.close();
       rmSync(home, { recursive: true, force: true });

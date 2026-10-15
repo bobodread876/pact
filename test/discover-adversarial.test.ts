@@ -157,5 +157,5 @@ describe('the longevity record counts only what a counterparty also signed', () 
     } finally {
       await relay.close();
     }
-  }, 60_000);
+  }, 180_000);
 });

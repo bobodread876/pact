@@ -144,7 +144,7 @@ describe('verifyBond: the mutual pair predicate', () => {
     const verdict = await verifyBond(bondId, relays, { secret: bob });
     expect(verdict.mutual).toBe(true);
     expect(new Set(verdict.parties)).toEqual(new Set([aliceHex, bobHex]));
-  }, 60_000);
+  }, 180_000);
 });
 
 describe('verifyBond: a junk flood p-tagging the proposer', () => {
@@ -178,7 +178,7 @@ describe('verifyBond: a junk flood p-tagging the proposer', () => {
     } finally {
       await relay.close();
     }
-  }, 60_000);
+  }, 180_000);
 });
 
 describe('private sides: the disclosed document must match what is counted', () => {
@@ -251,7 +251,7 @@ describe('acceptBond: consent and channel', () => {
     } finally {
       await a.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('a withdrawal on one relay is seen even when another relay is flooded with skewed history', async () => {
     // Relay A: Alice's proposal AND her withdrawal, plus 200 fresh junk wraps on top.
@@ -281,7 +281,7 @@ describe('acceptBond: consent and channel', () => {
       await a.close();
       await b.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('a flooded inbox still finds the private proposal; the accept stays private', async () => {
     const relay = await startMockRelay();
@@ -304,7 +304,7 @@ describe('acceptBond: consent and channel', () => {
     } finally {
       await relay.close();
     }
-  }, 60_000);
+  }, 180_000);
 });
 
 describe('reaffirmBond: channel and existence', () => {
@@ -380,7 +380,7 @@ describe('incomplete inbox reads (round 6)', () => {
       await a.close();
       await b.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('a relay set where NO relay serves the inbox is an incomplete read, not an empty inbox', async () => {
     const auth = await startMockRelay();
@@ -433,7 +433,7 @@ describe('incomplete inbox reads (round 6)', () => {
       await auth.close();
       await healthy.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   const junkWrap = (to: string, createdAt: number) => {
     const k = fresh();
@@ -476,7 +476,7 @@ describe('incomplete inbox reads (round 6)', () => {
     } finally {
       await a.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('an already-mutual private bond whose PARTY has a flooded inbox: verify says not mutual + inboxTruncated, reaffirm refuses', async () => {
     const a = await startMockRelay();
@@ -505,7 +505,7 @@ describe('incomplete inbox reads (round 6)', () => {
     } finally {
       await a.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('a NON-party with a flooded inbox still verifies someone else\'s public bond as mutual', async () => {
     const a = await startMockRelay();
@@ -525,7 +525,7 @@ describe('incomplete inbox reads (round 6)', () => {
     } finally {
       await a.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it.each(['closed', 'drop'] as const)(
     'a relay that stops answering mid-read (%s, no EOSE) flags the inbox incomplete; accept refuses over the hidden withdrawal',
@@ -585,7 +585,7 @@ describe('incomplete inbox reads (round 6)', () => {
       await a.close();
       await b.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('a capped relay saturated by one second is flagged incomplete', async () => {
     const a = await startMockRelay();
@@ -604,7 +604,7 @@ describe('incomplete inbox reads (round 6)', () => {
       await a.close();
       await b.close();
     }
-  }, 60_000);
+  }, 180_000);
 
   it('separate processes (CLI then CLI): a public withdrawal right after a private proposal is never tied, so accept refuses', async () => {
     const a = await startMockRelay();

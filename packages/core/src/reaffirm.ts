@@ -138,7 +138,7 @@ export interface ReaffirmationView {
 export async function listReaffirmations(
   secret: Uint8Array,
   relays: string[] = DEFAULT_RELAYS,
-): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[]; truncated?: boolean }> {
+): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[]; truncated?: boolean; inboxRelaysUnread?: string[] }> {
   const selfHex = keypairFromSecret(secret).pubkeyHex;
 
   const [mine, toward, wraps, ownSides] = await Promise.all([
@@ -198,5 +198,8 @@ export async function listReaffirmations(
     // The inbox could not be read to the end: private reaffirmations (and the
     // private bonds they count against) may be missing from the list.
     ...(wraps.truncated ? { truncated: true } : {}),
+    // Relays that never served the inbox: a private reaffirmation that landed
+    // only there is not counted.
+    ...(wraps.inboxRelaysUnread.length ? { inboxRelaysUnread: wraps.inboxRelaysUnread } : {}),
   };
 }
