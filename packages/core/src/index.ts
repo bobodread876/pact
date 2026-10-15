@@ -67,7 +67,7 @@ import { randomUUID } from 'node:crypto';
 
 import { kindFromContent, makeBondDocument, type BondState } from './bond.js';
 import { PactError } from './errors.js';
-import { findMutualPair, latestPerKey } from './mutual.js';
+import { CONSENTING_STATES, findMutualPair, latestPerKey } from './mutual.js';
 import { listPrivateBonds } from './private.js';
 
 function getTag(event: NostrEvent, name: string): string | null {
@@ -133,6 +133,22 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
   let createdAt = Math.floor(Date.now() / 1000);
 
+  // Relays keep the newest side per (author, d) and readers break a same-second
+  // tie by lowest id, so a quick follow-up (propose → withdraw) could lose the
+  // tie to the side it is meant to replace. Stamp strictly after this author's
+  // current side on EITHER channel (a bond may move between them, §13.7).
+  const selfHex = keypairFromSecret(secret).pubkeyHex;
+  const [publicPrior, privatePrior] = await Promise.all([
+    listBonds({ authors: [selfHex], '#d': [bondId], limit: 5 }, relays).catch(() => null),
+    listPrivateBonds(secret, relays, { bondId, author: selfHex }).catch(() => null),
+  ]);
+  const priorAt = Math.max(
+    0,
+    ...(publicPrior?.bonds ?? []).filter((b) => b.author === selfHex).map((b) => b.created_at),
+    ...(privatePrior?.bonds ?? []).map((b) => b.created_at),
+  );
+  if (priorAt >= createdAt) createdAt = priorAt + 1;
+
   if (input.visibility === 'private') {
     // Rumors are unsigned — the embedded proof is the bond's authorship
     // evidence and what selective disclosure verifies (extension §13.3).
@@ -153,13 +169,6 @@ export async function formBond(secret: Uint8Array, input: FormBondInput): Promis
     };
   }
 
-  // kind:30317 is addressable: relays keep the newest per (author, d) and
-  // break a same-second tie by lowest id. Stamp strictly after this author's
-  // current side so a quick follow-up (propose → withdraw) can't lose the tie.
-  const selfHex = keypairFromSecret(secret).pubkeyHex;
-  const prior = await listBonds({ authors: [selfHex], '#d': [bondId], limit: 5 }, relays).catch(() => null);
-  const priorAt = Math.max(0, ...(prior?.bonds ?? []).filter((b) => b.author === selfHex).map((b) => b.created_at));
-  if (priorAt >= createdAt) createdAt = priorAt + 1;
   const stateEvent = buildBondStateEvent(doc, secret, { createdAt });
   const result: FormBondResult = {
     bondId,
@@ -474,4 +483,7 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
 }
 
 /** Proposer states an accept may answer. */
-const ACCEPTABLE_STATES: ReadonlySet<string> = new Set(['proposed', 'accepted', 'active']);
+// A proposal can be accepted while the proposer still consents — the same set
+// the mutuality rule counts (mutual.ts), so "accept" and "mutual" never disagree
+// about `paused`.
+const ACCEPTABLE_STATES: ReadonlySet<string> = CONSENTING_STATES;

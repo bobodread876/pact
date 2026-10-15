@@ -217,13 +217,44 @@ describe('acceptBond: consent and channel', () => {
     expect((await verifyBond(bondId, relays)).mutual).toBe(false);
   });
 
-  it('refuses a withdrawn private proposal too', async () => {
+  it('refuses a withdrawn private proposal too — even when the withdraw lands in the same second', async () => {
     const bondId = newBondId();
     await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', visibility: 'private', relays });
-    await tick();
+    // No sleep: the private side must stamp strictly after the prior side, or a
+    // same-second tie is broken by lowest id and the withdrawal loses half the time.
     await formBond(alice, { counterparty: bobNpub, bondId, state: 'withdrawn', visibility: 'private', relays });
     await expect(acceptBond(bob, { bondId, relays })).rejects.toThrow(/is withdrawn/);
   });
+
+  it('a withdrawal on one relay is seen even when another relay is flooded with skewed history', async () => {
+    // Relay A: Alice's proposal AND her withdrawal, plus 200 fresh junk wraps on top.
+    // Relay B: only the proposal, plus 200 wraps backdated 49 days. A shared
+    // `until` cursor would jump both relays to 49 days ago after page 1 and skip
+    // A's withdrawal entirely; per-relay cursors must not.
+    const a = await startMockRelay();
+    const b = await startMockRelay();
+    try {
+      const bondId = newBondId();
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', visibility: 'private', relays: [a.url, b.url] });
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'withdrawn', visibility: 'private', relays: [a.url] });
+      const now = Math.floor(Date.now() / 1000);
+      const flood = async (relayUrl: string, base: number) => {
+        for (let i = 0; i < 200; i++) {
+          const junkKey = fresh();
+          await publishEvent([relayUrl], finalizeEvent({ pubkey: keypairFromSecret(junkKey).pubkeyHex, created_at: base + i, kind: 1059, tags: [['p', bobHex]], content: 'x' }, junkKey));
+        }
+      };
+      await flood(a.url, now + 60); // fresh junk on A
+      await flood(b.url, now - 49 * 86400); // backdated junk on B
+
+      const { bonds } = await listPrivateBonds(bob, [a.url, b.url], { bondId });
+      expect(bonds.map((x) => x.state)).toEqual(['withdrawn']);
+      await expect(acceptBond(bob, { bondId, relays: [a.url, b.url] })).rejects.toThrow(/is withdrawn/);
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  }, 60_000);
 
   it('a flooded inbox still finds the private proposal; the accept stays private', async () => {
     const relay = await startMockRelay();

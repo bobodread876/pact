@@ -177,20 +177,40 @@ const VERIFY_MAX_PENDING_PER_CLIENT = positiveIntEnv('PACT_VERIFY_MAX_PENDING_PE
 const TRUSTED_PROXY = !['', '0', 'false'].includes((process.env.PACT_TRUSTED_PROXY ?? '').toLowerCase());
 const invoiceRequests = new Map<string, number[]>();
 
+/**
+ * The bucket the per-client limits key on. One IPv6 host usually holds a
+ * whole /64, so IPv6 clients are bucketed by prefix; otherwise one machine
+ * could rotate through 2^64 "clients".
+ */
+function clientBucket(addr: string): string {
+  const a = addr.replace(/^::ffff:/i, '').replace(/%.*$/, '');
+  if (!a.includes(':')) return a;
+  const [head, tail = ''] = a.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return `${groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':')}::/64`;
+}
+
 /** The address the per-client limits key on. */
 function clientAddress(req: IncomingMessage): string {
   if (TRUSTED_PROXY) {
+    // Proxies APPEND the peer they saw to whatever X-Forwarded-For the client
+    // sent, so only the RIGHTMOST entry is the trusted proxy's word; anything
+    // left of it is client-chosen and would hand an attacker a fresh bucket
+    // per request.
     const fwd = req.headers['x-forwarded-for'];
-    const first = (Array.isArray(fwd) ? fwd[0] : fwd ?? '').split(',')[0].trim();
-    if (first) return first;
+    const raw = Array.isArray(fwd) ? fwd.join(',') : fwd ?? '';
+    const last = raw.split(',').map((s) => s.trim()).filter(Boolean).pop();
+    if (last) return clientBucket(last);
   }
-  return req.socket.remoteAddress ?? 'unknown';
+  return clientBucket(req.socket.remoteAddress ?? 'unknown');
 }
 
 /** Sliding one-minute window per client address. True = allowed (and counted). */
-function takeInvoiceSlot(client: string, now = Date.now()): boolean {
+function takeInvoiceSlot(client: string, now = Date.now(), limit = VERIFY_INVOICES_PER_MIN): boolean {
   const recent = (invoiceRequests.get(client) ?? []).filter((t) => now - t < 60_000);
-  if (recent.length >= VERIFY_INVOICES_PER_MIN) {
+  if (recent.length >= limit) {
     invoiceRequests.set(client, recent);
     return false;
   }
@@ -337,11 +357,14 @@ export function createDaemon(options: DaemonOptions = {}) {
         }
       }
 
-      // Paid-verification market: when a price is set, strangers can buy a
-      // verification without the admin token, which also pays invoices and
-      // replaces the identity. They get the public verdict only — private
-      // sides need this node's key, which is reserved for the operator.
-      if (path === '/bonds/verify' && method === 'GET' && VERIFY_PRICE_SATS > 0) {
+      // Paid-verification market: when a price is set AND a wallet is connected
+      // to collect it, strangers can buy a verification without the admin
+      // token, which also pays invoices and replaces the identity. They get
+      // the public verdict only — private sides need this node's key, which is
+      // reserved for the operator. With no wallet there is no market, so the
+      // route stays admin-only like everything else (a free, unthrottled
+      // verify would let anyone make this node hammer its relays).
+      if (path === '/bonds/verify' && method === 'GET' && VERIFY_PRICE_SATS > 0 && ln) {
         const authed = authorized(req);
         return await handleVerify(res, url, ln, { authed, client: clientAddress(req) });
       }
@@ -711,6 +734,13 @@ async function handleVerify(
         payment_hash: inv.paymentHash,
         hint: 'pay the invoice, then retry with &payment_hash=<hash>',
       });
+    }
+    // Anonymous redemption checks are throttled too (own bucket, 3× the
+    // issuance budget: a buyer polls a few times while paying): a valid unpaid
+    // hash would otherwise cost the operator one NWC round trip per request.
+    if (!caller.authed && !takeInvoiceSlot(`${caller.client}#redeem`, Date.now(), VERIFY_INVOICES_PER_MIN * 3)) {
+      res.setHeader('Retry-After', '60');
+      return json(res, 429, { error: 'too many verification requests — retry later' });
     }
     // Reject before bothering the wallet: the hash must be one we issued,
     // for THIS bond, and not already redeemed. (Cheap local pre-check.)

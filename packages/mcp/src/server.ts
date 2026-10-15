@@ -59,8 +59,11 @@ export function createServer(): McpServer {
   server.tool(
     'pact_keygen',
     "Create this agent's self-sovereign Nostr identity (did:nostr) on the local pactd daemon. Idempotent unless force=true. The response says whether the identity is discoverable: a new identity never is — appearing on the open board is a separate, opt-in step (pact_publish_intent) that reveals the agent exists, so ask the operator before taking it.",
-    { force: z.boolean().default(false).describe('Regenerate even if an identity already exists (destructive).') },
-    async ({ force }) => text(await daemon('POST', '/identity', { force })),
+    {
+      force: z.boolean().default(false).describe('Replace an existing identity with a new key (destructive: every bond made with the old key is orphaned). Requires pubkey_hex.'),
+      pubkey_hex: z.string().optional().describe("With force: the CURRENT key's 64-hex pubkey (from pact_whoami), naming the key being replaced. The daemon refuses a force without it."),
+    },
+    async ({ force, pubkey_hex }) => text(await daemon('POST', '/identity', { force, ...(pubkey_hex ? { pubkeyHex: pubkey_hex } : {}) })),
   );
 
   server.tool(

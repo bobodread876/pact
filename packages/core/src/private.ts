@@ -41,30 +41,40 @@ export async function fetchInbox(
   const selfHex = keypairFromSecret(secret).pubkeyHex;
   const byId = new Map<string, NostrEvent>();
   const reached = new Set<string>();
-  let until: number | undefined;
-  for (let page = 0; page < INBOX_MAX_PAGES; page++) {
-    const filter = {
-      kinds: [KIND_GIFT_WRAP],
-      '#p': [selfHex],
-      limit: INBOX_PAGE,
-      ...(until === undefined ? {} : { until }),
-    } as RelayFilter;
-    const { events, relaysReached } = await resolveEvents(relays, filter);
-    for (const r of relaysReached) reached.add(r);
-    let fresh = 0;
-    let oldest = Infinity;
-    for (const event of events) {
-      if (!byId.has(event.id)) {
-        byId.set(event.id, event);
-        fresh += 1;
+  // One cursor PER relay. A shared cursor takes the minimum created_at across
+  // relays, so a relay whose first page only covered the last few minutes
+  // would be asked for `until = <weeks ago>` next and everything in between
+  // would never be read. The inbox is public-write, so that skew can be
+  // arranged on purpose (fresh junk on one relay, backdated junk on another)
+  // to hide a withdrawal. Each relay pages down its own history.
+  await Promise.all(
+    relays.map(async (relay) => {
+      let until: number | undefined;
+      for (let page = 0; page < INBOX_MAX_PAGES; page++) {
+        const filter = {
+          kinds: [KIND_GIFT_WRAP],
+          '#p': [selfHex],
+          limit: INBOX_PAGE,
+          ...(until === undefined ? {} : { until }),
+        } as RelayFilter;
+        const { events, relaysReached } = await resolveEvents([relay], filter);
+        for (const r of relaysReached) reached.add(r);
+        let oldest = Infinity;
+        for (const event of events) {
+          if (!byId.has(event.id)) byId.set(event.id, event);
+          oldest = Math.min(oldest, event.created_at);
+        }
+        // Stop when this relay's page is short (its history is exhausted) or
+        // the cursor can't advance (more than a page within one second).
+        // `until` is inclusive, so events sharing the oldest second are
+        // re-read, never lost; events already seen from another relay still
+        // advance this relay's cursor.
+        if (events.length < INBOX_PAGE || !Number.isFinite(oldest)) break;
+        if (until !== undefined && oldest >= until) break;
+        until = oldest;
       }
-      oldest = Math.min(oldest, event.created_at);
-    }
-    // Done when a page brings nothing new or is short on every relay. `until`
-    // is inclusive, so events sharing the oldest second are re-read, never lost.
-    if (fresh === 0 || events.length < INBOX_PAGE || !Number.isFinite(oldest)) break;
-    until = oldest;
-  }
+    }),
+  );
   return { relaysReached: [...reached], events: [...byId.values()] };
 }
 

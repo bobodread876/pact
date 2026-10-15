@@ -201,28 +201,39 @@ describe('anonymous /bonds/verify: the caller never picks the relays', () => {
   it('an unauthenticated ?relay= is never dialed; the operator\'s still is; party params are validated', async () => {
     const attacker = await startMockRelay();
     const subHome = mkdtempSync(join(tmpdir(), 'pact-http-relay-'));
-    // Price set, no wallet: the market route is open and free.
+    // Price set AND a wallet: the market route is open to strangers (paid).
+    const wallet = stubWallet();
     const d = await startDaemon(
       { PACT_HOME: subHome, PACT_RELAYS: relay.url, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: '5', PACT_ALLOWED_HOSTS: undefined },
-      { lightning: null },
+      { lightning: wallet.provider },
     );
     try {
       const bondId = encodeURIComponent(newBondId());
       const evil = Array.from({ length: 20 }, () => `relay=${encodeURIComponent(attacker.url)}`).join('&');
       const before = relay.reqCount();
-      const anon = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&${evil}`);
+      const quote = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&${evil}`);
+      expect(quote.status).toBe(402);
+      const { payment_hash: hash } = (await quote.json()) as { payment_hash: string };
+      wallet.pay(hash);
+      const anon = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&payment_hash=${hash}&${evil}`);
       expect(anon.status).toBe(200);
       expect(((await anon.json()) as { relaysReached: string[] }).relaysReached).not.toContain(attacker.url);
       expect(attacker.reqCount()).toBe(0);
       expect(relay.reqCount()).toBeGreaterThan(before);
 
-      const op = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&${evil}`, { auth: true });
+      // The operator pays like anyone else when a wallet is connected, but may pick relays.
+      const opQuote = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&${evil}`, { auth: true });
+      expect(opQuote.status).toBe(402);
+      const { payment_hash: opHash } = (await opQuote.json()) as { payment_hash: string };
+      wallet.pay(opHash);
+      const op = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&payment_hash=${opHash}&${evil}`, { auth: true });
       expect(op.status).toBe(200);
       // Deduped: twenty copies of one relay are one relay.
       expect(((await op.json()) as { relaysReached: string[] }).relaysReached).toEqual([attacker.url]);
 
+      // Party params are validated before the paywall: a good one is quoted (402), a bad one is 400.
       const npub = keypairFromSecret(secretFromNsec(generateNostrKeypair().nsec)).npub;
-      expect((await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&party=${npub}`)).status).toBe(200);
+      expect((await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&party=${npub}`)).status).toBe(402);
       expect((await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&party=zzz`)).status).toBe(400);
     } finally {
       await d.close();
@@ -233,7 +244,7 @@ describe('anonymous /bonds/verify: the caller never picks the relays', () => {
 });
 
 describe('anonymous invoice issuing is bounded', () => {
-  it('per-client rate limit applies to strangers, the pending cap to everyone', async () => {
+  it('per-client rate limit and pending caps apply to strangers; the operator is exempt', async () => {
     const subHome = mkdtempSync(join(tmpdir(), 'pact-http-cap-'));
     const wallet = stubWallet();
     const d = await startDaemon(
@@ -277,16 +288,22 @@ describe('anonymous invoice issuing is bounded', () => {
     );
     try {
       const q = () => `/bonds/verify?bond_id=${encodeURIComponent(newBondId())}`;
-      const as = (ip: string) => ({ headers: { 'x-forwarded-for': `${ip}, 10.0.0.1` } });
+      // The proxy APPENDS the real peer; whatever the client put first is untrusted.
+      const as = (ip: string, spoofed = '198.51.100.1') => ({ headers: { 'x-forwarded-for': `${spoofed}, ${ip}` } });
       // Client A fills its share (2) and is refused on the third, with the pool far from full.
       const a = [];
       for (let i = 0; i < 3; i++) a.push((await call(d.base, 'GET', q(), as('203.0.113.7'))).status);
       expect(a).toEqual([402, 402, 429]);
-      // Client B is unaffected by A's holdings.
+      // Rotating the client-chosen leftmost entry does not buy a fresh bucket.
+      expect((await call(d.base, 'GET', q(), as('203.0.113.7', '203.0.113.99'))).status).toBe(429);
+      expect((await call(d.base, 'GET', q(), as('203.0.113.7', '2001:db8::1'))).status).toBe(429);
+      // IPv6 clients are bucketed by /64: two hosts in one /64 share a bucket.
+      expect((await call(d.base, 'GET', q(), as('2001:db8:1:2::10'))).status).toBe(402);
+      expect((await call(d.base, 'GET', q(), as('2001:db8:1:2::11'))).status).toBe(402);
+      expect((await call(d.base, 'GET', q(), as('2001:db8:1:2:ffff::1'))).status).toBe(429);
+      // Client B is unaffected by A's holdings. Pool is now 4/5 (A 2 + the /64 pair 2).
       expect((await call(d.base, 'GET', q(), as('203.0.113.8'))).status).toBe(402);
-      expect((await call(d.base, 'GET', q(), as('203.0.113.8'))).status).toBe(402);
-      // Pool is now 4/5. C takes the last slot; D hits the global cap.
-      expect((await call(d.base, 'GET', q(), as('203.0.113.9'))).status).toBe(402);
+      // D hits the global cap.
       expect((await call(d.base, 'GET', q(), as('203.0.113.10'))).status).toBe(429);
       // The operator is never locked out by strangers' unpaid invoices.
       expect((await call(d.base, 'GET', q(), { auth: true })).status).toBe(402);
@@ -337,6 +354,27 @@ describe('API-only listener', () => {
       expect((await call(d.base, 'GET', '/identity', { auth: true })).status).toBe(200);
     } finally {
       await d.close();
+    }
+  });
+});
+
+describe('a price without a wallet is not a market', () => {
+  it('anonymous /bonds/verify gets 401, not a free unthrottled verify', async () => {
+    const subHome = mkdtempSync(join(tmpdir(), 'pact-http-nowallet-'));
+    const d = await startDaemon(
+      { PACT_HOME: subHome, PACT_RELAYS: relay.url, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: '5', PACT_ALLOWED_HOSTS: undefined },
+      { lightning: null },
+    );
+    try {
+      const before = relay.reqCount();
+      const anon = await call(d.base, 'GET', `/bonds/verify?bond_id=${encodeURIComponent(newBondId())}`);
+      expect(anon.status).toBe(401);
+      expect(relay.reqCount()).toBe(before); // no relay was dialed for a stranger
+      const op = await call(d.base, 'GET', `/bonds/verify?bond_id=${encodeURIComponent(newBondId())}`, { auth: true });
+      expect(op.status).toBe(200);
+    } finally {
+      await d.close();
+      rmSync(subHome, { recursive: true, force: true });
     }
   });
 });
