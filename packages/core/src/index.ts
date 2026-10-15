@@ -6,7 +6,9 @@
 
 export * from '@mate-protocol/core';
 export { kindFromContent, makeBondDocument, type BondState, type MakeBondOptions } from './bond.js';
+export { verifyBondDisclosure } from './disclosure.js';
 export * from './keystore.js';
+export { computeMutual } from './mutual.js';
 export { listPrivateBonds, type PrivateBondFilter } from './private.js';
 export {
   publishIntent,
@@ -48,6 +50,7 @@ import {
 import { randomUUID } from 'node:crypto';
 
 import { kindFromContent, makeBondDocument, type BondState } from './bond.js';
+import { computeMutual } from './mutual.js';
 import { listPrivateBonds } from './private.js';
 
 function getTag(event: NostrEvent, name: string): string | null {
@@ -172,13 +175,14 @@ export interface BondView {
 export async function listBonds(
   filter: Pick<RelayFilter, 'authors' | '#d' | '#p'>,
   relays: string[] = DEFAULT_RELAYS,
-): Promise<{ relaysReached: string[]; bonds: BondView[] }> {
+): Promise<{ relaysReached: string[]; bonds: BondView[]; truncated: boolean }> {
   // #t scopes the query to MATE bonds — kinds 30317/1317 are unallocated, so
   // filtering by the discriminator tag avoids resolving unrelated apps' events.
+  const limit = 50;
   const { events, relaysReached } = await resolveEvents(relays, {
     kinds: [30317],
     '#t': [BOND_TAG],
-    limit: 50,
+    limit,
     ...filter,
   });
   const bonds = events
@@ -194,15 +198,23 @@ export async function listBonds(
       signature_valid: verifyEvent(event),
       visibility: 'public' as const,
     }));
-  return { relaysReached, bonds };
+  // Any relay answers at most `limit` events; a merged result at the limit
+  // means crowding spam may have pushed honest events out of the window, so
+  // callers can treat downstream verdicts as inconclusive.
+  return { relaysReached, bonds, truncated: events.length >= limit };
 }
 
 export interface VerifyBondResult {
   bondId: string;
   relaysReached: string[];
   count: number;
-  /** Both sides published a valid state event that cross-references the other. */
+  /** Both sides' latest signed states cross-reference each other and are live. */
   mutual: boolean;
+  /**
+   * The public side of the query hit a relay's result limit — the event window
+   * may be incomplete (crowding), so treat the verdict as inconclusive.
+   */
+  truncated: boolean;
   /** True when any side of the bond arrived via the private transport. */
   private?: boolean;
   bonds: BondView[];
@@ -220,8 +232,9 @@ export interface VerifyBondOptions {
 
 /**
  * Resolve every state event for a bond id, verify signatures, and decide whether
- * the bond is *mutual*: at least two signed sides where some side p-tags another
- * side's author. Shared by pactd's /bonds/verify and the SDK/CLI.
+ * the bond is *mutual* via `computeMutual`: the two sides' latest signed states
+ * cross-reference each other and complete the handshake (offer met by
+ * acceptance). Shared by pactd's /bonds/verify and the SDK/CLI.
  *
  * With `options.secret`, private (gift-wrapped) sides this key can decrypt are
  * included — so the two parties see their mutual private bond verified, while
@@ -232,7 +245,7 @@ export async function verifyBond(
   relays: string[] = DEFAULT_RELAYS,
   options: VerifyBondOptions = {},
 ): Promise<VerifyBondResult> {
-  const { relaysReached, bonds } = await listBonds({ '#d': [bondId] }, relays);
+  const { relaysReached, bonds, truncated } = await listBonds({ '#d': [bondId] }, relays);
 
   let merged = bonds;
   let reached = relaysReached;
@@ -242,17 +255,14 @@ export async function verifyBond(
     reached = [...new Set([...relaysReached, ...priv.relaysReached])];
   }
 
-  const authors = new Set(merged.map((b) => b.author));
-  const mutual =
-    merged.length >= 2 &&
-    merged.every((b) => b.signature_valid) &&
-    merged.some((b) => authors.has(b.counterparty ?? ''));
+  const mutual = computeMutual(merged, bondId);
   const anyPrivate = merged.some((b) => b.visibility === 'private');
   return {
     bondId,
     relaysReached: reached,
     count: merged.length,
     mutual,
+    truncated,
     ...(anyPrivate ? { private: true } : {}),
     bonds: merged,
   };
@@ -295,7 +305,12 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
       bondId: input.bondId,
       counterparty: selfHex,
     });
-    const inbound = [...publicBonds, ...privateBonds].filter((b) => b.author !== selfHex);
+    const inbound = [...publicBonds, ...privateBonds].filter(
+      // Only a validly-signed, still-`proposed` record that genuinely p-tags
+      // this identity is a proposal worth answering — forgeries, stale states,
+      // and misdirected events never steer the acceptance.
+      (b) => b.author !== selfHex && b.counterparty === selfHex && b.signature_valid && b.state === 'proposed',
+    );
     const proposers = [...new Set(inbound.map((b) => b.author))];
 
     if (!counterparty) {

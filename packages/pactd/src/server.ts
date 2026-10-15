@@ -3,6 +3,7 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import {
   DEFAULT_RELAYS,
   acceptBond,
+  computeMutual,
   ensureIdentity,
   formBond,
   hasIdentity,
@@ -352,11 +353,7 @@ export function createDaemon() {
           ? await listPrivateBonds(loadSecret(), relaysFrom(url), { bondId })
           : { relaysReached: [] as string[], bonds: [] };
         const bonds = [...pubSide.bonds, ...privSide.bonds];
-        const authors = new Set(bonds.map((b) => b.author));
-        const mutual =
-          bonds.length >= 2 &&
-          bonds.every((b) => b.signature_valid) &&
-          bonds.some((b) => authors.has(b.counterparty ?? ''));
+        const mutual = computeMutual(bonds, bondId);
         return json(res, 200, {
           bond_id: bondId,
           paid: paywalled ? true : undefined,
@@ -364,6 +361,7 @@ export function createDaemon() {
           relaysReached: [...new Set([...pubSide.relaysReached, ...privSide.relaysReached])],
           count: bonds.length,
           mutual,
+          truncated: pubSide.truncated,
           private: bonds.some((b) => b.visibility === 'private') || undefined,
           bonds,
         });

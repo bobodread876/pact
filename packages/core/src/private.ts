@@ -12,12 +12,12 @@ import {
   pubkeyHexFromIdentity,
   resolveEvents,
   selectBondRumors,
-  verifyProof,
   type MateDocument,
   type PrivateBondRumor,
 } from '@mate-protocol/core';
 
 import { kindFromContent } from './bond.js';
+import { verifyBondDisclosure } from './disclosure.js';
 import type { BondView } from './index.js';
 
 export interface PrivateBondFilter {
@@ -34,33 +34,41 @@ export interface PrivateBondFilter {
  *
  * `signature_valid` for a private bond means the full chain held:
  * seal signature (checked during unwrap) → seal/rumor author match → embedded
- * document proof verifies → document subject is the authenticated author.
- * Public bonds get the same flag from the event signature alone; the embedded
- * proof is what survives disclosure, so it is what we verify here.
+ * document proof verifies subject-bound → document subject is the
+ * authenticated author. Public bonds get the same flag from the event
+ * signature alone; the embedded proof is what survives disclosure, so it is
+ * what we verify here.
+ *
+ * Tag/doc binding: rumor tags are unsigned and chosen by the author. Once the
+ * embedded document verifies, it is authoritative — the view is filed under
+ * the DOCUMENT's bond/counterparty/state, and a rumor whose tags disagree with
+ * its own verified document is dropped entirely (returns null).
  */
-function toBondView(r: PrivateBondRumor): BondView {
-  let proofValid = false;
+function toBondView(r: PrivateBondRumor): BondView | null {
+  const base = {
+    id: r.rumor.id,
+    author: r.author,
+    kind: kindFromContent(r.rumor.content),
+    created_at: r.rumor.created_at,
+    visibility: 'private' as const,
+  };
   try {
     const doc = JSON.parse(r.rumor.content) as MateDocument;
     const proofs = doc.proofs ?? [];
-    proofValid =
+    const authentic =
       proofs.length > 0 &&
-      proofs.every((proof) => verifyProof(doc, proof)) &&
+      proofs.every((proof) => verifyBondDisclosure(doc, proof)) &&
       pubkeyHexFromIdentity(doc.subject.id) === r.author;
+    if (!authentic) {
+      return { ...base, bond: r.bond, counterparty: r.counterparty, state: r.state, signature_valid: false };
+    }
+    const counterparty = pubkeyHexFromIdentity(doc.object.id);
+    const state = String(doc.bond.state);
+    if (r.bond !== doc.bond.id || r.counterparty !== counterparty || r.state !== state) return null;
+    return { ...base, bond: doc.bond.id, counterparty, state, signature_valid: true };
   } catch {
-    proofValid = false;
+    return { ...base, bond: r.bond, counterparty: r.counterparty, state: r.state, signature_valid: false };
   }
-  return {
-    id: r.rumor.id,
-    author: r.author,
-    bond: r.bond,
-    counterparty: r.counterparty,
-    state: r.state,
-    kind: kindFromContent(r.rumor.content),
-    created_at: r.rumor.created_at,
-    signature_valid: proofValid,
-    visibility: 'private',
-  };
 }
 
 /**
@@ -95,6 +103,7 @@ export async function listPrivateBonds(
     if (authorHex && rumor.author !== authorHex) continue;
     if (counterpartyHex && rumor.counterparty !== counterpartyHex) continue;
     const view = toBondView(rumor);
+    if (!view) continue;
     const key = `${view.author}:${view.bond ?? view.id}`;
     const prior = latest.get(key);
     // NIP-01 replaceable semantics, applied client-side: newest created_at
