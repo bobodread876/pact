@@ -354,9 +354,54 @@ describe('listReaffirmations: only the bond\'s parties count', () => {
 });
 
 describe('incomplete inbox reads (round 6)', () => {
+  it('a relay that serves part of page 0 and then drops is partial history: flagged, nothing accepted', async () => {
+    // The carve-out for "refused outright" rests on `events.length === 0`.
+    // Relay A serves 200 newer junk wraps (above the withdrawal) and dies;
+    // relay B holds only the proposal. Counting A as merely unreached would
+    // let the withdrawal below the junk go unread and the accept go through.
+    const a = await startMockRelay();
+    const b = await startMockRelay();
+    try {
+      const both = [a.url, b.url];
+      const bondId = newBondId();
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', visibility: 'private', relays: both });
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'withdrawn', visibility: 'private', relays: [a.url] });
+      const now = Math.floor(Date.now() / 1000);
+      await flood(a.url, bobHex, 200, (i) => now + 60 + i);
+
+      a.failReqsAfter(0, 'drop', 1059);
+      const inbox = await listPrivateBonds(bob, both, { bondId });
+      expect(inbox.truncated).toBe(true);
+      expect(inbox.relaysReached).toContain(a.url); // it did serve something
+      expect(inbox.inboxRelaysUnread).toEqual([]);
+      a.failReqsAfter(0, 'drop', 1059);
+      await expect(acceptBond(bob, { bondId, relays: both })).rejects.toThrow(/inbox incomplete/);
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  }, 60_000);
+
+  it('a relay set where NO relay serves the inbox is an incomplete read, not an empty inbox', async () => {
+    const auth = await startMockRelay();
+    try {
+      const bondId = newBondId();
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', visibility: 'private', relays: [auth.url] });
+      auth.failReqsAfter(0, 'closed', 1059);
+      const inbox = await listPrivateBonds(bob, [auth.url], { bondId });
+      expect(inbox.truncated).toBe(true);
+      expect(inbox.relaysReached).toEqual([]);
+      expect(inbox.inboxRelaysUnread).toEqual([auth.url]);
+      auth.failReqsAfter(0, 'closed', 1059);
+      await expect(acceptBond(bob, { bondId, relays: [auth.url] })).rejects.toThrow(/inbox incomplete/);
+    } finally {
+      await auth.close();
+    }
+  });
+
   it('a relay that refuses the inbox outright (CLOSED on page 0, e.g. NIP-42 auth-required) is unreached, not truncation', async () => {
-    // (A socket that DROPS on page 0 may have delivered part of the history
-    // first; that is partial history and stays flagged — covered below.)
+    // A socket that DROPS on page 0 after serving events is partial history
+    // and stays flagged — see the test above.
     const mode = 'closed' as const;
     // relay.damus.io is in DEFAULT_RELAYS and answers every #p kind:1059 REQ
     // with CLOSED auth-required. If that counted as a truncated inbox, every
@@ -373,6 +418,7 @@ describe('incomplete inbox reads (round 6)', () => {
       const inbox = await listPrivateBonds(bob, both, { bondId });
       expect(inbox.truncated).toBe(false);
       expect(inbox.relaysReached).toEqual([healthy.url]);
+      expect(inbox.inboxRelaysUnread).toEqual([auth.url]); // named, so a caller can tell
       expect(inbox.bonds.map((x) => x.state)).toEqual(['proposed']);
 
       auth.failReqsAfter(0, mode, 1059);
@@ -382,6 +428,7 @@ describe('incomplete inbox reads (round 6)', () => {
       const v = await verifyBond(bondId, both, { secret: bob });
       expect(v.mutual).toBe(true);
       expect(v.inboxTruncated).toBeUndefined();
+      expect(v.inboxRelaysUnread).toEqual([auth.url]);
     } finally {
       await auth.close();
       await healthy.close();

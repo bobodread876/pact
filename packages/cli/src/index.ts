@@ -49,6 +49,8 @@ function out(json: boolean, human: string, data: unknown): void {
 
 const INBOX_NOTE =
   '\n  (inbox incomplete (flooded): the private inbox could not be read to the end — private sides may be missing)';
+/** Private inbox not served by some relays: a private side that landed only there was not seen. */
+const unreadNote = (relays?: string[]) => (relays && relays.length ? `\n  (private inbox not served by: ${relays.join(', ')})` : '');
 
 function bondLine(b: BondView): string {
   const mark = b.signature_valid ? '✓' : '✗';
@@ -211,7 +213,7 @@ async function main(): Promise<void> {
       }
 
       if (sub === 'list') {
-        const { relaysReached, bonds, inboxTruncated } = await pact.listBonds({
+        const { relaysReached, bonds, inboxTruncated, inboxRelaysUnread } = await pact.listBonds({
           author: values.author as string | undefined,
           counterparty: values.counterparty as string | undefined,
           bondId: values['bond-id'] as string | undefined,
@@ -220,9 +222,9 @@ async function main(): Promise<void> {
         out(
           json,
           bonds.length
-            ? `${bonds.length} bond(s) [${relaysReached.length} relay(s)]:\n${bonds.map(bondLine).join('\n')}${inboxTruncated ? INBOX_NOTE : ''}`
-            : `No bonds found.${inboxTruncated ? INBOX_NOTE : ''}`,
-          { relaysReached, bonds, ...(inboxTruncated ? { inboxTruncated } : {}) },
+            ? `${bonds.length} bond(s) [${relaysReached.length} relay(s)]:\n${bonds.map(bondLine).join('\n')}${inboxTruncated ? INBOX_NOTE : ''}${unreadNote(inboxRelaysUnread)}`
+            : `No bonds found.${inboxTruncated ? INBOX_NOTE : ''}${unreadNote(inboxRelaysUnread)}`,
+          { relaysReached, bonds, ...(inboxTruncated ? { inboxTruncated } : {}), ...(inboxRelaysUnread ? { inboxRelaysUnread } : {}) },
         );
         return;
       }
@@ -257,7 +259,7 @@ async function main(): Promise<void> {
         const result = await pact.verifyBond(bondId);
         out(
           json,
-          `Bond '${bondId}': ${result.mutual ? 'MUTUAL ✓' : result.inboxTruncated ? 'not mutual: inbox incomplete (flooded)' : 'not mutual'} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).\n${result.bonds.map(bondLine).join('\n')}`,
+          `Bond '${bondId}': ${result.mutual ? 'MUTUAL ✓' : result.inboxTruncated ? 'not mutual: inbox incomplete (flooded)' : 'not mutual'} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).${unreadNote(result.inboxRelaysUnread)}\n${result.bonds.map(bondLine).join('\n')}`,
           result,
         );
         if (!result.mutual) process.exitCode = 1;

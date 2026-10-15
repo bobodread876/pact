@@ -563,7 +563,7 @@ export function createDaemon(options: DaemonOptions = {}) {
                 author: author ?? undefined,
                 counterparty: counterparty ?? undefined,
               })
-            : { relaysReached: [] as string[], bonds: [], truncated: false };
+            : { relaysReached: [] as string[], bonds: [], truncated: false, inboxRelaysUnread: [] as string[] };
 
         return json(res, 200, {
           relaysReached: [...new Set([...pub.relaysReached, ...priv.relaysReached])],
@@ -571,6 +571,9 @@ export function createDaemon(options: DaemonOptions = {}) {
           // The private inbox could not be read to the end: private sides
           // (or their latest state) may be missing from `bonds`.
           ...(priv.truncated ? { inboxTruncated: true } : {}),
+          // Relays that never served the inbox (they may still be "reached" for
+          // public kinds): a private side that landed only there was not seen.
+          ...(priv.inboxRelaysUnread.length ? { inboxRelaysUnread: priv.inboxRelaysUnread } : {}),
         });
       }
       if (path === '/bonds/verify' && method === 'GET') {
@@ -811,16 +814,26 @@ function startEventStream(req: IncomingMessage, res: ServerResponse, url: URL): 
 
   res.write(`event: ready\ndata: ${JSON.stringify({ pubkey: self, intervalMs })}\n\n`);
 
+  let lastUnreadKey = '';
   const poll = async (): Promise<void> => {
     try {
       const [pub, priv] = await Promise.all([
         listBonds({ '#p': [self] }, relays),
         listPrivateBonds(loadSecret(), relays, { counterparty: self }),
       ]);
-      if (priv.truncated) {
-        // Once per poll: the private inbox was only partly read, so a private
-        // change (a withdrawal, say) may be missing from this poll's events.
-        res.write(`event: warning\ndata: ${JSON.stringify({ warning: 'inbox incomplete', inboxTruncated: true })}\n\n`);
+      const unreadKey = priv.inboxRelaysUnread.join(',');
+      if (priv.truncated || unreadKey !== lastUnreadKey) {
+        // Truncated: once per poll — a private change (a withdrawal, say) may
+        // be missing from this poll's events. Unread relays: whenever the set
+        // changes — a private side that landed only on one of them is unseen.
+        lastUnreadKey = unreadKey;
+        res.write(
+          `event: warning\ndata: ${JSON.stringify({
+            warning: priv.truncated ? 'inbox incomplete' : 'inbox not served by some relays',
+            ...(priv.truncated ? { inboxTruncated: true } : {}),
+            ...(priv.inboxRelaysUnread.length ? { inboxRelaysUnread: priv.inboxRelaysUnread } : {}),
+          })}\n\n`,
+        );
       }
       for (const b of [...pub.bonds, ...priv.bonds]) {
         const key = `${b.bond}:${b.author}:${b.visibility}`;

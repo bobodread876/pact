@@ -302,6 +302,13 @@ export interface VerifyBondResult {
    * verdict on someone else's bond is unaffected (the flag is still reported).
    */
   inboxTruncated?: boolean;
+  /**
+   * Relays that were asked for this node's private inbox but never served it
+   * (down, or refusing it — e.g. NIP-42 `auth-required`). They may still appear
+   * in `relaysReached` for the public kinds; a private side that landed only
+   * on one of them was not seen.
+   */
+  inboxRelaysUnread?: string[];
   /** Every side seen (latest per author + channel), including ones that did not count. */
   bonds: BondView[];
   /** Sides that failed verification; reported, never counted. */
@@ -379,12 +386,14 @@ export async function verifyBond(
   }
 
   let inboxTruncated = false;
+  let inboxRelaysUnread: string[] = [];
   const selfHex = options.secret ? keypairFromSecret(options.secret).pubkeyHex : null;
   if (options.secret) {
     const priv = await listPrivateBonds(options.secret, relays, { bondId });
     sides = [...sides, ...priv.bonds];
     for (const r of priv.relaysReached) reached.add(r);
     inboxTruncated = priv.truncated;
+    inboxRelaysUnread = priv.inboxRelaysUnread;
   }
 
   // Dedupe (several queries return the same events), then latest per
@@ -408,6 +417,7 @@ export async function verifyBond(
     // bond mutual on a partial read; anyone else's bond is unaffected.
     mutual: pair !== null && !(inboxTruncated && selfHex !== null && pair.parties.includes(selfHex)),
     ...(inboxTruncated ? { inboxTruncated: true } : {}),
+    ...(inboxRelaysUnread.length ? { inboxRelaysUnread } : {}),
     ...(pair ? { parties: pair.parties } : {}),
     ...(anyPrivate ? { private: true } : {}),
     bonds,

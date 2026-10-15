@@ -84,6 +84,8 @@ export interface BondQueryResult {
   bonds: BondView[];
   /** The private inbox could not be read to the end: private sides may be missing. */
   inboxTruncated?: boolean;
+  /** Relays asked for the private inbox that never served it (see core VerifyBondResult). */
+  inboxRelaysUnread?: string[];
 }
 
 /**
@@ -176,7 +178,7 @@ export class Pact {
         : await coreListBonds(filter, relays);
     const priv =
       visibility === 'public'
-        ? { relaysReached: [] as string[], bonds: [] as BondView[], truncated: false }
+        ? { relaysReached: [] as string[], bonds: [] as BondView[], truncated: false, inboxRelaysUnread: [] as string[] }
         : await coreListPrivateBonds(this.secret, relays, {
             bondId: args.bondId,
             author: args.author,
@@ -187,6 +189,7 @@ export class Pact {
       relaysReached: [...new Set([...pub.relaysReached, ...priv.relaysReached])],
       bonds: [...pub.bonds, ...priv.bonds].sort((a, b) => b.created_at - a.created_at),
       ...(priv.truncated ? { inboxTruncated: true } : {}),
+      ...(priv.inboxRelaysUnread.length ? { inboxRelaysUnread: priv.inboxRelaysUnread } : {}),
     };
   }
 

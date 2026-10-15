@@ -107,7 +107,7 @@ function queryPage(relay: string, filter: RelayFilter, timeoutMs = PAGE_TIMEOUT_
 export async function fetchInbox(
   secret: Uint8Array,
   relays: string[],
-): Promise<{ relaysReached: string[]; events: NostrEvent[]; truncated: boolean }> {
+): Promise<{ relaysReached: string[]; events: NostrEvent[]; truncated: boolean; inboxRelaysUnread: string[] }> {
   const selfHex = keypairFromSecret(secret).pubkeyHex;
   const byId = new Map<string, NostrEvent>();
   const reached = new Set<string>();
@@ -191,7 +191,14 @@ export async function fetchInbox(
       truncated = true;
     }),
   );
-  return { relaysReached: [...reached], events: [...byId.values()], truncated };
+  // Relays that were asked but never served the inbox (down, or refusing it,
+  // e.g. NIP-42 auth-required). Reported by name because a surface that unions
+  // public and private reach would otherwise list such a relay as "reached"
+  // when its inbox was never read. If NO relay served the inbox, nothing was
+  // read at all: that is an incomplete read, not an empty inbox.
+  const inboxRelaysUnread = relays.filter((r) => !reached.has(r));
+  if (relays.length > 0 && reached.size === 0) truncated = true;
+  return { relaysReached: [...reached], events: [...byId.values()], truncated, inboxRelaysUnread };
 }
 
 export interface PrivateBondFilter {
@@ -257,9 +264,9 @@ export async function listPrivateBonds(
   secret: Uint8Array,
   relays: string[],
   filter: PrivateBondFilter = {},
-): Promise<{ relaysReached: string[]; bonds: BondView[]; truncated: boolean }> {
-  const { events, relaysReached, truncated } = await fetchInbox(secret, relays);
-  return { relaysReached, truncated, bonds: privateBondViews(events, secret, filter) };
+): Promise<{ relaysReached: string[]; bonds: BondView[]; truncated: boolean; inboxRelaysUnread: string[] }> {
+  const { events, relaysReached, truncated, inboxRelaysUnread } = await fetchInbox(secret, relays);
+  return { relaysReached, truncated, inboxRelaysUnread, bonds: privateBondViews(events, secret, filter) };
 }
 
 /**
