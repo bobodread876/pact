@@ -19,6 +19,11 @@ ENV NODE_ENV=production \
 # In a container pactd binds 0.0.0.0; the platform (compose/Umbrel/Start9)
 # controls external exposure. Key + local store persist on the /data volume.
 COPY --from=build /app /app
+# Production-only runtime: drop devDependencies (typescript et al.).
+RUN npm ci --omit=dev && npm cache clean --force
+# Run unprivileged; the state volume must be writable by the node user.
+RUN mkdir -p /data && chown -R node:node /data
+USER node
 VOLUME ["/data"]
 EXPOSE 8787
 CMD ["node", "packages/pactd/dist/index.js"]

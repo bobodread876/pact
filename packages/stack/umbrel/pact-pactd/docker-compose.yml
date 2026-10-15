@@ -31,10 +31,12 @@ services:
     environment:
       PACT_HOST: 0.0.0.0
       PACT_PORT: "8787"
-      # Bearer token for external/agent API access — deterministic per-install,
-      # derived from the app's Umbrel seed. Shown in the Pact UI's "Connect an
-      # agent" panel (behind Umbrel login).
-      PACT_TOKEN: ${APP_SEED}
+      # Bearer auth is default-on: pactd generates + persists a random token in
+      # the app data dir (data/.pact/token, mode 600) — auto-derived from the
+      # Umbrel seed is gone (deterministic secrets leak). The UI never carries
+      # the token; agents read it from the file or you paste it into the UI's
+      # lock screen.
+      PACT_PUBLIC_MODE: "1"
       # The host-mapped direct port (below), so the UI's "Connect an agent"
       # command shows the right URL instead of the app_proxy login port.
       PACT_PUBLIC_PORT: "3737"
