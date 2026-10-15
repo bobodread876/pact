@@ -8,7 +8,11 @@ The Pact **sidecar daemon** — the universal adapter. A local long-running proc
 npx pact-pactd            # listens on http://127.0.0.1:8787
 ```
 
-Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only), `PACT_TOKEN` (optional bearer token), `PACT_HOME` (key dir, default `~/.pact`), `PACT_NWC` (wallet-connect URI), `PACT_VERIFY_PRICE_SATS` (paid-verification price; default 0 = free).
+Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only), `PACT_TOKEN` (explicit bearer token — see auth below), `PACT_HOME` (key dir, default `~/.pact`), `PACT_NWC` (wallet-connect URI), `PACT_VERIFY_PRICE_SATS` (paid-verification price; default 0 = free).
+
+## Auth (default-on)
+
+Every API route except `GET /healthz` and the `GET /` status shell requires `Authorization: Bearer <token>`. Resolution: `PACT_TOKEN` if set; otherwise pactd **generates a random token on first run and persists it to `<PACT_HOME>/token` (mode 600)** — same-machine clients (the UI, `pact-mcp`, local scripts) read it from there. `PACT_NO_AUTH=1` is a dev-only escape hatch (loud startup warning). On a non-loopback `PACT_HOST`, `PACT_PUBLIC_MODE` defaults on (the served UI never contains the token; override with `PACT_PUBLIC_MODE=1/0`). Requests carrying a body must send `content-type: application/json`; mutating browser requests must be same-origin, and loopback binds reject non-loopback `Host` headers.
 
 ## HTTP API
 
@@ -31,10 +35,11 @@ Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only),
 ### Example
 
 ```bash
+TOKEN=$(cat ~/.pact/token)          # persisted on first run (mode 600)
 curl -s localhost:8787/healthz
-curl -s -XPOST localhost:8787/identity
-curl -s -XPOST localhost:8787/bonds -d '{"counterparty":"did:nostr:npub1…","bondId":"urn:mate:demo","state":"proposed"}'
-curl -s "localhost:8787/bonds/verify?bond_id=urn:mate:demo"
+curl -s -XPOST localhost:8787/identity -H "Authorization: Bearer $TOKEN"
+curl -s -XPOST localhost:8787/bonds -H "Authorization: Bearer $TOKEN" -d '{"counterparty":"did:nostr:npub1…","bondId":"urn:mate:demo","state":"proposed"}'
+curl -s "localhost:8787/bonds/verify?bond_id=urn:mate:demo" -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Sats / Lightning (Nostr Wallet Connect)

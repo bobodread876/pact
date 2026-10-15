@@ -33,7 +33,7 @@ import {
   verificationStatus,
 } from './ledger.js';
 import { lightningFrom } from './lightning.js';
-import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
+import { relaysAreCustom, resolveRelays, sanitizeRelayUrl, saveRelays } from './relayconfig.js';
 import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
@@ -41,14 +41,27 @@ import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 export const VERSION = '0.18.0';
 
 // Bearer token for API access. PACT_TOKEN, else an auto-generated persisted
-// token when PACT_AUTO_TOKEN is set, else undefined (open — loopback only).
-const TOKEN = resolveToken();
+// token in PACT_HOME (auth is default-on), else undefined only under the
+// explicit PACT_NO_AUTH=1 dev escape hatch. See tokenconfig.ts.
+export const TOKEN = resolveToken();
 
-// Public-exposure mode: when set, the status UI never embeds the bearer token in
-// the page HTML (the operator enters it; agents read it from config). Turn this
-// on for any node reachable beyond a trusted LAN / login (e.g. a public reverse
-// proxy), so loading the page can't leak the token to anonymous visitors.
-const PUBLIC_MODE = !['', '0', 'false'].includes((process.env.PACT_PUBLIC_MODE ?? '').toLowerCase());
+// The configured bind host (index.ts listens with the same default). Loopback
+// binds enforce an anti-DNS-rebinding Host allowlist; non-loopback binds rely
+// on the Origin check + token.
+export const HOST = process.env.PACT_HOST ?? '127.0.0.1';
+
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}
+
+const LOOPBACK_BIND = isLoopbackHost(HOST);
+
+// Public-exposure mode: gates the UI's public-bind banner/agent-card text.
+// Defaults ON for non-loopback binds (a public bind is public posture) and OFF
+// on loopback; PACT_PUBLIC_MODE=1/0 overrides either way.
+const publicModeEnv = (process.env.PACT_PUBLIC_MODE ?? '').toLowerCase();
+export const PUBLIC_MODE = publicModeEnv === '' ? !LOOPBACK_BIND : !['0', 'false'].includes(publicModeEnv);
 // Wallet provider: configured at runtime (via the UI / POST /wallet/connect,
 // persisted in PACT_HOME) or from PACT_NWC. Mutable so it can be (re)connected.
 let lightning = lightningFrom(loadNwcUri());
@@ -67,7 +80,29 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body, null, 2));
 }
 
+/** Rejection carrying its HTTP status (e.g. 415 for non-JSON bodies). */
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  // Any request carrying a body must declare application/json (parameters
+  // allowed). Browser forms can only send text/plain/urlencoded/multipart
+  // without a preflight, so this gate removes the no-preflight CSRF vector.
+  const declaredLength = Number(req.headers['content-length'] ?? 0);
+  const hasBody = declaredLength > 0 || Boolean(req.headers['transfer-encoding']);
+  if (hasBody) {
+    const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0].trim().toLowerCase();
+    if (mediaType !== 'application/json') {
+      req.resume(); // drain so the connection stays healthy
+      return Promise.reject(new HttpError(415, 'unsupported media type — bodies must be application/json'));
+    }
+  }
   return new Promise((resolve, reject) => {
     let data = '';
     req.on('data', (chunk) => {
@@ -101,8 +136,48 @@ function authorized(req: IncomingMessage): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+// The Host header's hostname, IPv6 brackets stripped; undefined when missing
+// or malformed.
+function hostHeaderHostname(req: IncomingMessage): string | undefined {
+  const raw = req.headers.host;
+  if (!raw) return undefined;
+  try {
+    return new URL(`http://${raw}`).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return undefined;
+  }
+}
+
+// On a loopback bind the Host hostname must be loopback — anything else is a
+// DNS-rebinding probe riding the operator's browser.
+function hostAllowed(req: IncomingMessage): boolean {
+  if (!LOOPBACK_BIND) return true;
+  const hostname = hostHeaderHostname(req);
+  return hostname !== undefined && isLoopbackHost(hostname);
+}
+
+// Mutating requests carrying an Origin header must be same-origin with the
+// Host they target. Absent Origin (curl, pact-mcp, server-to-server) passes.
+function originAllowed(req: IncomingMessage, method: string): boolean {
+  if (!MUTATING_METHODS.has(method)) return true;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  const host = req.headers.host;
+  if (!host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 function relaysFrom(url: URL): string[] {
-  const relays = url.searchParams.getAll('relay');
+  const relays = url.searchParams
+    .getAll('relay')
+    .map((r) => sanitizeRelayUrl(r))
+    .filter((r): r is string => r !== undefined);
   return relays.length ? relays : RELAYS;
 }
 
@@ -114,11 +189,17 @@ export function createDaemon() {
       const method = req.method ?? 'GET';
       const ln = lightning; // per-request snapshot (const → narrows across awaits)
 
-      // Status UI + health are unauthenticated (the UI itself injects the token
-      // for its API calls; on Umbrel the page is behind app_proxy).
+      if (!hostAllowed(req)) return json(res, 403, { error: 'forbidden host' });
+      if (!originAllowed(req, method)) return json(res, 403, { error: 'cross-origin request rejected' });
+      // No CORS preflight surface: OPTIONS is not a route.
+      if (method === 'OPTIONS') return json(res, 404, { error: 'not found', path });
+
+      // Status UI + health are unauthenticated (the UI keeps the token in
+      // sessionStorage and re-prompts on 401; on Umbrel the page is behind
+      // app_proxy). The page HTML itself never carries the token.
       if (path === '/' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(renderUI(TOKEN, process.env.PACT_PUBLIC_PORT, process.env.PACT_RELAY_PUBLIC_PORT, PUBLIC_MODE));
+        return res.end(renderUI(undefined, process.env.PACT_PUBLIC_PORT, process.env.PACT_RELAY_PUBLIC_PORT, PUBLIC_MODE));
       }
       if (path === '/healthz') {
         return json(res, 200, {
@@ -450,8 +531,12 @@ export function createDaemon() {
           .map((r) => r.trim())
           .filter(Boolean);
         if (relays.length === 0) return json(res, 400, { error: 'at least one relay URL required' });
-        const bad = relays.find((r) => !/^wss?:\/\//.test(r));
-        if (bad) return json(res, 400, { error: `invalid relay URL (must start with ws:// or wss://): ${bad}` });
+        const bad = relays.filter((r) => sanitizeRelayUrl(r) === undefined);
+        if (bad.length > 0) {
+          return json(res, 400, {
+            error: `invalid relay URLs (must be bare ws:// or wss://, no credentials): ${bad.join(', ')}`,
+          });
+        }
         saveRelays(relays);
         RELAYS = relays;
         return json(res, 200, { relays: RELAYS, custom: true });
@@ -462,6 +547,7 @@ export function createDaemon() {
 
       return json(res, 404, { error: 'not found', path });
     } catch (error) {
+      if (error instanceof HttpError) return json(res, error.status, { error: error.message });
       return json(res, 500, { error: error instanceof Error ? error.message : String(error) });
     }
   });
