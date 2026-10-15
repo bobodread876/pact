@@ -6,7 +6,10 @@
 // explicit install-time choice (PACT_INTENT_SEEKING) by publishing the intent
 // they asked for once an identity exists.
 
-import { myIntent, publishIntent, type PublishIntentResult } from 'pact-core';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { keypairFromSecret, myIntent, pactHome, publishIntent, type PublishIntentResult } from 'pact-core';
 
 export const INTENT_SEEKING_ENV = 'PACT_INTENT_SEEKING';
 export const INTENT_ABOUT_ENV = 'PACT_INTENT_ABOUT';
@@ -56,6 +59,41 @@ export function publishedStatus(result: PublishIntentResult | null): DiscoverySt
   };
 }
 
+// --- the local unlist marker ---
+// An unlist must not depend on which relays answer at boot: if no reachable
+// relay holds the closed record (a relay was added later, the old one is down),
+// myIntent returns null and the env would re-list the node without consent. So
+// the operator's unlist is also recorded locally, keyed to the identity, and it
+// wins whatever the relays say. Only an explicit open intent clears it.
+
+function unlistedPath(): string {
+  return join(pactHome(), 'intent-closed.json');
+}
+
+/** Record that the operator unlisted this identity. */
+export function markUnlisted(secret: Uint8Array): void {
+  mkdirSync(pactHome(), { recursive: true });
+  const pubkeyHex = keypairFromSecret(secret).pubkeyHex;
+  writeFileSync(unlistedPath(), JSON.stringify({ pubkeyHex, closedAt: Math.floor(Date.now() / 1000) }), { mode: 0o600 });
+}
+
+/** Clear the unlist marker (the operator explicitly published an open intent). */
+export function clearUnlisted(): void {
+  rmSync(unlistedPath(), { force: true });
+}
+
+/** Whether the operator unlisted this identity on this node. */
+export function isUnlisted(secret: Uint8Array): boolean {
+  try {
+    if (!existsSync(unlistedPath())) return false;
+    const data = JSON.parse(readFileSync(unlistedPath(), 'utf8')) as { pubkeyHex?: string };
+    return data.pubkeyHex === keypairFromSecret(secret).pubkeyHex;
+  } catch {
+    // An unreadable marker is still an unlist: fail closed, never re-list.
+    return true;
+  }
+}
+
 function sameIntent(a: ConfiguredIntent, b: { seeking?: string[]; about?: string; status?: string }): boolean {
   const bs = [...(b.seeking ?? [])].sort();
   const as = [...a.seeking].sort();
@@ -70,6 +108,8 @@ function sameIntent(a: ConfiguredIntent, b: { seeking?: string[]; about?: string
  * A closed intent on the relays is an operator decision ("unlist"), and it
  * wins over the env: the node is never put back on the board on restart. To
  * re-list, the operator publishes an intent explicitly (POST /intent).
+ * The unlist is also recorded locally (markUnlisted), so it holds even when no
+ * reachable relay carries the closed record.
  */
 export async function applyConfiguredIntent(
   secret: Uint8Array,
@@ -78,6 +118,7 @@ export async function applyConfiguredIntent(
 ): Promise<PublishIntentResult | null> {
   const wanted = configuredIntent(env);
   if (!wanted) return null;
+  if (isUnlisted(secret)) return null;
   const current = await myIntent(secret, relays);
   if (current?.status === 'closed') return null;
   if (current && sameIntent(wanted, current)) return null;

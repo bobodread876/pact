@@ -16,6 +16,7 @@ import {
   generateNostrKeypair,
   keypairFromSecret,
   listBonds,
+  loadSecret,
   myIntent,
   newBondId,
   secretFromNsec,
@@ -191,6 +192,53 @@ describe('PACT_INTENT_SEEKING: the explicit install-time choice', () => {
     // Next boot: the closed intent is the operator's decision and wins over the env.
     expect(await intentconfig.applyConfiguredIntent(node, relays, env)).toBeNull();
     expect((await myIntent(node, relays))?.status).toBe('closed');
+  });
+
+  it('an unlist holds even when no reachable relay carries the closed record', async () => {
+    const unlistHome = mkdtempSync(join(tmpdir(), 'pact-optin-unlist-'));
+    const prevHome = process.env.PACT_HOME;
+    process.env.PACT_HOME = unlistHome;
+    const fresh = await startMockRelay(); // e.g. a relay added after the unlist, while the old one is down
+    try {
+      const node = secretFromNsec(generateNostrKeypair().nsec);
+      const env = { PACT_INTENT_SEEKING: 'collaboration' };
+      expect((await intentconfig.applyConfiguredIntent(node, relays, env))?.status).toBe('open');
+      intentconfig.markUnlisted(node);
+      await closeIntent(node, relays);
+
+      // Next boot sees only the fresh relay: no closed record anywhere it can reach.
+      expect(await myIntent(node, [fresh.url])).toBeNull();
+      expect(await intentconfig.applyConfiguredIntent(node, [fresh.url], env)).toBeNull();
+      expect(await myIntent(node, [fresh.url])).toBeNull();
+
+      // The marker is per identity: another key in the same home is unaffected.
+      const other = secretFromNsec(generateNostrKeypair().nsec);
+      expect(intentconfig.isUnlisted(other)).toBe(false);
+      expect((await intentconfig.applyConfiguredIntent(other, [fresh.url], env))?.status).toBe('open');
+    } finally {
+      await fresh.close();
+      process.env.PACT_HOME = prevHome;
+      rmSync(unlistHome, { recursive: true, force: true });
+    }
+  });
+
+  it('daemon: POST /intent closed records the unlist; an explicit open intent lifts it', async () => {
+    const secret = loadSecret(); // the daemon identity created earlier in this file
+    const fresh = await startMockRelay();
+    const env = { PACT_INTENT_SEEKING: 'collaboration' };
+    try {
+      await api('POST', '/intent', { status: 'closed' });
+      expect(intentconfig.isUnlisted(secret)).toBe(true);
+      expect(await intentconfig.applyConfiguredIntent(secret, [fresh.url], env)).toBeNull();
+      expect(await myIntent(secret, [fresh.url])).toBeNull();
+
+      const reopened = await api('POST', '/intent', { seeking: ['collaboration'] });
+      expect(reopened.status).toBe('open');
+      expect(intentconfig.isUnlisted(secret)).toBe(false);
+      expect((await intentconfig.applyConfiguredIntent(secret, [fresh.url], env))?.status).toBe('open');
+    } finally {
+      await fresh.close();
+    }
   });
 
   it('reports discoverable:false when no relay accepted the configured intent', async () => {

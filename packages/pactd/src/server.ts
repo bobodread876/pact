@@ -32,7 +32,15 @@ import {
   verificationStatus,
 } from './ledger.js';
 import { lightningFrom } from './lightning.js';
-import { NOT_DISCOVERABLE_HINT, applyConfiguredIntent, configuredIntent, discoveryStatus, publishedStatus } from './intentconfig.js';
+import {
+  NOT_DISCOVERABLE_HINT,
+  applyConfiguredIntent,
+  clearUnlisted,
+  configuredIntent,
+  discoveryStatus,
+  markUnlisted,
+  publishedStatus,
+} from './intentconfig.js';
 import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
 import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
@@ -231,18 +239,23 @@ export function createDaemon() {
         if (!hasIdentity()) return json(res, 400, { error: 'no identity — POST /identity first' });
         const body = await readJson(req);
         if (body.status === 'closed') {
+          // Record the unlist locally first, so it holds even if no relay keeps the close.
+          markUnlisted(loadSecret());
           return json(res, 200, await closeIntent(loadSecret(), Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS));
         }
         const seeking = Array.isArray(body.seeking)
           ? (body.seeking as unknown[]).filter((k): k is string => typeof k === 'string')
           : [];
         if (seeking.length === 0) return json(res, 400, { error: 'seeking (array of bond kinds) is required' });
-        return json(res, 200, await publishIntent(loadSecret(), {
+        const published = await publishIntent(loadSecret(), {
           seeking,
           about: typeof body.about === 'string' ? body.about.slice(0, 400) : undefined,
           profile: typeof body.profile === 'string' ? body.profile : undefined,
           relays: Array.isArray(body.relays) ? (body.relays as string[]) : RELAYS,
-        }));
+        });
+        // An explicit open intent is the operator re-listing: lift the unlist.
+        clearUnlisted();
+        return json(res, 200, published);
       }
       if (path === '/intent' && method === 'GET') {
         if (!hasIdentity()) return json(res, 200, { intent: null });
