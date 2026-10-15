@@ -48,7 +48,7 @@ import {
   markUnlisted,
   publishedStatus,
 } from './intentconfig.js';
-import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
+import { relaysAreCustom, resolveRelays, sanitizeRelayUrl, saveRelays } from './relayconfig.js';
 import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
@@ -124,15 +124,6 @@ function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
-/** A client error with its HTTP status (mapped in the request handler). */
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 function identityHex(value: string, field: string): string {
   try {
@@ -257,7 +248,29 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body, null, 2));
 }
 
+/** Rejection carrying its HTTP status (e.g. 415 for non-JSON bodies). */
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  // Any request carrying a body must declare application/json (parameters
+  // allowed). Browser forms can only send text/plain/urlencoded/multipart
+  // without a preflight, so this gate removes the no-preflight CSRF vector.
+  const declaredLength = Number(req.headers['content-length'] ?? 0);
+  const hasBody = declaredLength > 0 || Boolean(req.headers['transfer-encoding']);
+  if (hasBody) {
+    const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0].trim().toLowerCase();
+    if (mediaType !== 'application/json') {
+      req.resume(); // drain so the connection stays healthy
+      return Promise.reject(new HttpError(415, 'unsupported media type — bodies must be application/json'));
+    }
+  }
   return new Promise((resolve, reject) => {
     let data = '';
     let tooLarge = false;
@@ -353,6 +366,9 @@ export function createDaemon(options: DaemonOptions = {}) {
       }
 
       if (!sameOrigin(req)) return json(res, 403, { error: 'cross-origin request refused' });
+      // No CORS preflight surface: OPTIONS is not a route (nothing to answer
+      // a preflight with, so browsers refuse to send the real request).
+      if (method === 'OPTIONS') return json(res, 404, { error: 'not found', path });
       // A non-GET must declare a JSON body. Browsers can only send that
       // cross-origin after a CORS preflight, which pactd never approves.
       if (method !== 'GET' && method !== 'HEAD') {
@@ -663,8 +679,12 @@ export function createDaemon(options: DaemonOptions = {}) {
           .map((r) => r.trim())
           .filter(Boolean);
         if (relays.length === 0) return json(res, 400, { error: 'at least one relay URL required' });
-        const bad = relays.find((r) => !/^wss?:\/\//.test(r));
-        if (bad) return json(res, 400, { error: `invalid relay URL (must start with ws:// or wss://): ${bad}` });
+        const bad = relays.filter((r) => sanitizeRelayUrl(r) === undefined);
+        if (bad.length > 0) {
+          return json(res, 400, {
+            error: `invalid relay URLs (must be bare ws:// or wss://, no credentials): ${bad.join(', ')}`,
+          });
+        }
         saveRelays(relays);
         RELAYS = relays;
         return json(res, 200, { relays: RELAYS, custom: true });
