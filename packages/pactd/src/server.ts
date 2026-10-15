@@ -27,7 +27,9 @@ import { timingSafeEqual } from 'node:crypto';
 
 import {
   consumeVerification,
+  countPendingVerifications,
   ownsPaymentHash,
+  pendingVerificationForBond,
   recordPaymentHash,
   recordVerificationInvoice,
   verificationStatus,
@@ -69,6 +71,17 @@ let lightning = lightningFrom(loadNwcUri());
 // Paid-verification market (opt-in): price in sats to verify a bond. 0 = free.
 // Only enforced when a wallet is connected (otherwise there's no way to collect).
 const VERIFY_PRICE_SATS = Math.max(0, Math.floor(Number(process.env.PACT_VERIFY_PRICE_SATS) || 0));
+
+// Issuance DoS bound: at most this many outstanding (unredeemed) verification
+// invoices at once. Every anonymous 402 would otherwise mint a fresh NWC
+// invoice and grow the ledger unboundedly (PACT_VERIFY_MAX_PENDING overrides).
+const MAX_PENDING_INVOICES = Math.max(1, Math.floor(Number(process.env.PACT_VERIFY_MAX_PENDING) || 1000));
+
+// In-flight redemption guard: a payment hash being redeemed right now. The
+// paid path below awaits across the wallet lookup and relay reads, so two
+// concurrent requests for the same hash could otherwise both fulfill before
+// either consumes. The loser gets a 409, not a double-fulfill.
+const inflightRedemptions = new Set<string>();
 
 // Active relay set. Resolution: relays.json (set via the UI / POST /relays) >
 // PACT_RELAYS env > the protocol defaults. Mutable so it can be (re)configured
@@ -389,13 +402,31 @@ export function createDaemon() {
         if (paywalled && ln) {
           const paymentHash = url.searchParams.get('payment_hash');
           if (!paymentHash) {
+            // Reuse the live invoice already issued for this bond: re-asking
+            // must not mint a second one (unbounded issuance DoS).
+            const pending = pendingVerificationForBond(bondId);
+            if (pending?.invoice) {
+              return json(res, 402, {
+                error: 'payment required',
+                price_sats: VERIFY_PRICE_SATS,
+                invoice: pending.invoice,
+                payment_hash: pending.hash,
+                hint: 'pay the invoice, then retry with &payment_hash=<hash>',
+              });
+            }
+            if (countPendingVerifications() >= MAX_PENDING_INVOICES) {
+              return json(res, 429, {
+                error: 'too many outstanding verification invoices — redeem or let one expire before requesting another',
+              });
+            }
             const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
             if (!inv.paymentHash) {
               return json(res, 502, { error: 'wallet returned no payment hash; cannot gate verification' });
             }
             recordPaymentHash(inv.paymentHash);
-            // Bind this invoice to this bond, single-use — see ledger.ts.
-            recordVerificationInvoice(inv.paymentHash, bondId);
+            // Bind this invoice to this bond, single-use — see ledger.ts. The
+            // bolt11 is recorded too, so a re-ask reuses it (above).
+            recordVerificationInvoice(inv.paymentHash, bondId, inv.invoice);
             return json(res, 402, {
               error: 'payment required',
               price_sats: VERIFY_PRICE_SATS,
@@ -416,19 +447,59 @@ export function createDaemon() {
           if (status === 'spent') {
             return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
           }
-          const look = await ln.lookupInvoice({ paymentHash });
-          if (!look.paid) {
-            return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+          // In-flight guard: two concurrent redemptions of the same hash must
+          // not both fulfill. The loser waits out with a 409 and can retry.
+          if (inflightRedemptions.has(paymentHash)) {
+            return json(res, 409, { error: 'a redemption for this payment hash is already in progress', payment_hash: paymentHash });
           }
-          // Authoritative single-use consume (synchronous; wins the race).
-          if (!consumeVerification(paymentHash, bondId)) {
-            return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
+          inflightRedemptions.add(paymentHash);
+          try {
+            const look = await ln.lookupInvoice({ paymentHash });
+            if (!look.paid) {
+              return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+            }
+
+            // FULFILL before consuming: read the relays and build the result
+            // FIRST, so a failure here leaves the paid redemption retryable.
+            const pubSide = await listBonds({ '#d': [bondId] }, relaysFrom(url));
+            const privSide = hasIdentity()
+              ? await listPrivateBonds(loadSecret(), relaysFrom(url), { bondId })
+              : { relaysReached: [] as string[], bonds: [] };
+            const relaysReached = [...new Set([...pubSide.relaysReached, ...privSide.relaysReached])];
+            if (relaysReached.length === 0) {
+              // No relay answered: nothing was fulfilled. The redemption is
+              // deliberately NOT consumed — a 502 + retry beats a burned payment.
+              return json(res, 502, {
+                error: 'no relay could be reached — verification not fulfilled and the payment hash was not redeemed; retry later',
+                payment_hash: paymentHash,
+              });
+            }
+
+            // CONSUME LAST: the redemption burns only after successful
+            // fulfillment, and the write is atomic/fail-closed (ledger.ts).
+            if (!consumeVerification(paymentHash, bondId)) {
+              return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
+            }
+
+            const bonds = [...pubSide.bonds, ...privSide.bonds];
+            const mutual = computeMutual(bonds, bondId);
+            return json(res, 200, {
+              bond_id: bondId,
+              paid: true,
+              price_sats: VERIFY_PRICE_SATS,
+              relaysReached,
+              count: bonds.length,
+              mutual,
+              truncated: pubSide.truncated,
+              private: bonds.some((b) => b.visibility === 'private') || undefined,
+              bonds,
+            });
+          } finally {
+            inflightRedemptions.delete(paymentHash);
           }
         }
 
-        // Public events always count; gift-wrapped sides are included when this
-        // node holds a key that can decrypt them. To anyone else a private bond
-        // is invisible — verification of one is disclosure-mediated by design.
+        // Free path (no paywall configured): same verification, no gating.
         const pubSide = await listBonds({ '#d': [bondId] }, relaysFrom(url));
         const privSide = hasIdentity()
           ? await listPrivateBonds(loadSecret(), relaysFrom(url), { bondId })
