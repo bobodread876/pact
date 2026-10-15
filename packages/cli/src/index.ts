@@ -5,9 +5,10 @@
 // with --relay, repeatable).
 
 import { parseArgs } from 'node:util';
+import { pathToFileURL } from 'node:url';
 
 import { ensureIdentity, hasIdentity, loadIdentity } from 'pact-core';
-import { Pact, type BondState, type BondView } from 'pact-sdk';
+import { Pact, type BondState, type BondView, type Candidate } from 'pact-sdk';
 
 const HELP = `pact — agent relationship bonds from the shell
 
@@ -40,10 +41,30 @@ function out(json: boolean, human: string, data: unknown): void {
   else console.log(human);
 }
 
-function bondLine(b: BondView): string {
+// Audit F-15 / CWE-150: relay-controlled strings (bond ids, about text, npubs,
+// kinds) must never reach the terminal raw — an OSC-52 sequence in one `about`
+// field writes to the operator's clipboard on print. Strip whole ESC-initiated
+// sequences (OSC … BEL/ESC\, CSI … final byte, two-byte ESC sequences) first so
+// no usable remnants survive, then any stray C0 control chars (keeping TAB/LF
+// for layout) and the C1 range. Benign text is returned byte-identical.
+const ESCAPE_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~]|\u001b[@-_]/g;
+const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+export function sanitizeTerminal(value: string): string {
+  return value.replace(ESCAPE_SEQUENCE, '').replace(CONTROL_CHARS, '');
+}
+
+export function bondLine(b: BondView): string {
   const mark = b.signature_valid ? '✓' : '✗';
   const lock = b.visibility === 'private' ? '🔒' : '  ';
-  return `  ${mark}${lock} ${(b.state ?? '?').padEnd(10)} ${b.bond ?? '(no id)'}  ${b.author.slice(0, 12)}…`;
+  return `  ${mark}${lock} ${sanitizeTerminal(b.state ?? '?').padEnd(10)} ${sanitizeTerminal(b.bond ?? '(no id)')}  ${sanitizeTerminal(b.author.slice(0, 12))}…`;
+}
+
+export function candidateLine(c: Candidate): string {
+  const line =
+    `  ${c.score.toFixed(1).padStart(6)}  ${sanitizeTerminal(c.author.slice(0, 12))}…  ` +
+    `seeks ${c.seeking.map(sanitizeTerminal).join('/')}  · ${c.record.bonds} bond(s), ${c.record.reaffirmations} reaffirmation(s)`;
+  return c.about ? line + `\n          “${sanitizeTerminal(c.about)}”` : line;
 }
 
 async function main(): Promise<void> {
@@ -130,7 +151,7 @@ async function main(): Promise<void> {
         json,
         candidates.length
           ? `${candidates.length} agent(s) open to bonds [${relaysReached.length} relay(s)]:\n` +
-            candidates.map((c) => `  ${c.score.toFixed(1).padStart(6)}  ${c.author.slice(0, 12)}…  seeks ${c.seeking.join('/')}  · ${c.record.bonds} bond(s), ${c.record.reaffirmations} reaffirmation(s)` + (c.about ? `\n          “${c.about}”` : '')).join('\n')
+            candidates.map(candidateLine).join('\n')
           : 'No open intents found on your relays.',
         { relaysReached, candidates },
       );
@@ -156,11 +177,12 @@ async function main(): Promise<void> {
           visibility: values.private ? 'private' : undefined,
         });
         const reached = result.stateEvent.relays.filter((r) => r.accepted).length;
+        const bondIdShown = sanitizeTerminal(result.bondId);
         out(
           json,
           result.visibility === 'private'
-            ? `Private bond '${result.bondId}' wrapped as '${result.state}' (rumor ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s); copy-to-self published).`
-            : `Bond '${result.bondId}' published as '${result.state}' (state event ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s)).`,
+            ? `Private bond '${bondIdShown}' wrapped as '${result.state}' (rumor ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s); copy-to-self published).`
+            : `Bond '${bondIdShown}' published as '${result.state}' (state event ${result.stateEvent.id.slice(0, 12)}… → ${reached} relay(s)).`,
           result,
         );
         return;
@@ -181,7 +203,7 @@ async function main(): Promise<void> {
         const reached = result.stateEvent.relays.filter((r) => r.accepted).length;
         out(
           json,
-          `Accepted bond '${result.bondId}' as '${result.state}'${result.visibility === 'private' ? ' (private)' : ''} (→ ${reached} relay(s)).`,
+          `Accepted bond '${sanitizeTerminal(result.bondId)}' as '${result.state}'${result.visibility === 'private' ? ' (private)' : ''} (→ ${reached} relay(s)).`,
           result,
         );
         return;
@@ -226,7 +248,7 @@ async function main(): Promise<void> {
         }
         const result = await pact.reaffirmBond(bondId, { counterparty: counterparty!, visibility });
         const reached = result.event.relays.filter((r) => r.accepted).length;
-        out(json, `Reaffirmed '${result.bondId}'${result.visibility === 'private' ? ' (private)' : ''} — chosen again (→ ${reached} relay(s)).`, result);
+        out(json, `Reaffirmed '${sanitizeTerminal(result.bondId)}'${result.visibility === 'private' ? ' (private)' : ''} — chosen again (→ ${reached} relay(s)).`, result);
         return;
       }
 
@@ -259,7 +281,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+// Run only when invoked as the `pact` script — the module is also imported by
+// tests for sanitizeTerminal/bondLine/candidateLine, and importing must not
+// start the CLI.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(sanitizeTerminal(error instanceof Error ? error.message : String(error)));
+    process.exitCode = 1;
+  });
+}
