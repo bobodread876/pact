@@ -31,9 +31,11 @@ import { timingSafeEqual } from 'node:crypto';
 import {
   VERIFICATION_INVOICE_EXPIRY_SECS,
   consumeVerification,
+  countPendingVerifications,
   ownsPaymentHash,
   pendingVerificationCount,
   pendingVerificationCountFor,
+  pendingVerificationForBond,
   recordPaymentHash,
   recordVerificationInvoice,
   verificationStatus,
@@ -150,6 +152,12 @@ function positiveIntEnv(name: string, fallback: number): number {
   const n = Math.floor(Number(process.env[name]));
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+// In-flight redemption guard: a payment hash being redeemed right now. The
+// paid path below awaits across the wallet lookup and relay reads, so two
+// concurrent requests for the same hash could otherwise both fulfill before
+// either consumes. The loser gets a 409, not a double-fulfill.
+const inflightRedemptions = new Set<string>();
 
 // Anonymous callers can make the daemon create invoices in the operator's
 // wallet, so issuing is bounded: at most this many unredeemed, unexpired
@@ -753,6 +761,18 @@ async function handleVerify(
           return json(res, 429, { error: 'too many verification invoices requested — retry later' });
         }
       }
+      // Reuse the live invoice already issued for this bond: re-asking must
+      // not mint a second one (unbounded issuance DoS + NWC round-trip cost).
+      const live = pendingVerificationForBond(bondId);
+      if (live?.invoice) {
+        return json(res, 402, {
+          error: 'payment required',
+          price_sats: VERIFY_PRICE_SATS,
+          invoice: live.invoice,
+          payment_hash: live.hash,
+          hint: 'pay the invoice, then retry with &payment_hash=<hash>',
+        });
+      }
       const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`, VERIFICATION_INVOICE_EXPIRY_SECS);
       if (!inv.paymentHash) {
         return json(res, 502, { error: 'wallet returned no payment hash; cannot gate verification' });
@@ -760,7 +780,7 @@ async function handleVerify(
       recordPaymentHash(inv.paymentHash);
       // Bind this invoice to this bond, single-use — see ledger.ts. Throws if
       // it can't be persisted: never hand out an invoice we can't honor.
-      recordVerificationInvoice(inv.paymentHash, bondId, Date.now(), caller.authed ? undefined : caller.client);
+      recordVerificationInvoice(inv.paymentHash, bondId, Date.now(), caller.authed ? undefined : caller.client, inv.invoice);
       return json(res, 402, {
         error: 'payment required',
         price_sats: VERIFY_PRICE_SATS,
@@ -788,17 +808,44 @@ async function handleVerify(
     if (status === 'spent') {
       return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
     }
-    const look = await ln.lookupInvoice({ paymentHash });
-    if (!look.paid) {
-      return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+    // Concurrent-redemption guard: the paid path awaits across the wallet
+    // lookup and relay reads; two requests for the same hash must not both
+    // fulfill. The loser gets a 409 and can retry.
+    if (inflightRedemptions.has(paymentHash)) {
+      return json(res, 409, { error: 'this payment hash is being redeemed right now — retry in a moment', payment_hash: paymentHash });
     }
-    // Authoritative single-use consume (synchronous after the await; wins
-    // the race). Throws (→ 500, nothing served) if it can't be persisted.
+    inflightRedemptions.add(paymentHash);
+    let verdict;
+    try {
+      const look = await ln.lookupInvoice({ paymentHash });
+      if (!look.paid) {
+        return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+      }
+      // FULFILL before consuming: read the relays and build the verdict
+      // first. A verification that fails (no relay answered, daemon error)
+      // must NOT burn the operator's payment — nothing was consumed, the
+      // redemption stays reusable, and the caller sees the error.
+      const secret = caller.authed && hasIdentity() ? loadSecret() : undefined;
+      verdict = await verifyBond(bondId, relays, { ...(secret ? { secret } : {}), ...(parties.length ? { parties } : {}) });
+    } finally {
+      inflightRedemptions.delete(paymentHash);
+    }
+    // Authoritative single-use consume (synchronous now that the verdict is
+    // in hand; wins the race). Throws (→ 500, nothing served) if it can't be
+    // persisted — the redemption is NOT consumed, so a retry after the disk
+    // recovers still works.
     if (!consumeVerification(paymentHash, bondId)) {
       return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
     }
+    return json(res, 200, {
+      bond_id: bondId,
+      paid: true,
+      price_sats: VERIFY_PRICE_SATS,
+      ...verdict,
+    });
   }
 
+  // Unpaid path (no wallet, or free verification).
   // Public events always count; gift-wrapped sides are included when this
   // node holds a key that can decrypt them AND the caller is the operator.
   // To anyone else a private bond is invisible — disclosure-mediated by design.

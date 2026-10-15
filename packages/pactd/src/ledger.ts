@@ -153,10 +153,16 @@ export function pendingVerificationCountFor(client: string | undefined, now = Da
 }
 
 /** Record an invoice issued to gate verification of a specific bond. */
-export function recordVerificationInvoice(hash: string, bondId: string, now = Date.now(), client?: string): void {
+export function recordVerificationInvoice(
+  hash: string,
+  bondId: string,
+  now = Date.now(),
+  client?: string,
+  invoice?: string,
+): void {
   const map = loadVerifications();
   if (map.has(hash)) return;
-  map.set(hash, { bondId, consumed: false, issuedAt: now, ...(client ? { client } : {}) });
+  map.set(hash, { bondId, consumed: false, issuedAt: now, ...(client ? { client } : {}), ...(invoice ? { invoice } : {}) });
   try {
     persistVerifications(map);
   } catch (error) {
