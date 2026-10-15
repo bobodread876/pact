@@ -145,10 +145,20 @@ export async function discover(
       }
       rec.oldestBondDays = Math.max(rec.oldestBondDays, Math.floor((now - event.created_at) / 86400));
     }
+    // One increment per (author, bond): repeated reaffirmations of the same
+    // bond are one ongoing choice, and letting them accrete would let spam
+    // mint the exact signal the fold exists to measure.
+    const reaffsSeen = new Map<string, Set<string>>();
     for (const event of reaffs.events) {
       if (!verifyEvent(event)) continue;
       const rec = records.get(event.pubkey);
-      if (rec) rec.reaffirmations += 1;
+      if (!rec) continue;
+      const d = event.tags.find((t) => t[0] === 'd')?.[1] ?? event.id;
+      const set = reaffsSeen.get(event.pubkey) ?? new Set();
+      if (set.has(d)) continue;
+      set.add(d);
+      reaffsSeen.set(event.pubkey, set);
+      rec.reaffirmations += 1;
     }
   }
 
