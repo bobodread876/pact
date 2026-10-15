@@ -32,7 +32,7 @@ import {
   verificationStatus,
 } from './ledger.js';
 import { lightningFrom } from './lightning.js';
-import { applyConfiguredIntent, configuredIntent, discoveryStatus } from './intentconfig.js';
+import { NOT_DISCOVERABLE_HINT, applyConfiguredIntent, configuredIntent, discoveryStatus, publishedStatus } from './intentconfig.js';
 import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
 import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
@@ -159,11 +159,13 @@ export function createDaemon() {
         const identity = ensureIdentity(Boolean(body.force));
         // A fresh key has no intent anywhere. If the operator pre-chose one
         // (PACT_INTENT_SEEKING), honor that explicit choice now that a key
-        // exists; otherwise just say the node isn't discoverable and how to opt in.
-        if (identity.created && configuredIntent()) {
+        // exists; otherwise just say the node isn't discoverable and how to
+        // opt in (no relay round trip: a brand-new key cannot have an intent).
+        if (identity.created) {
+          if (!configuredIntent()) return json(res, 200, { ...identity, discoverable: false, hint: NOT_DISCOVERABLE_HINT });
           try {
             const intent = await applyConfiguredIntent(loadSecret(), RELAYS);
-            return json(res, 200, { ...identity, discoverable: true, intent });
+            return json(res, 200, { ...identity, ...publishedStatus(intent), intent });
           } catch (error) {
             return json(res, 200, { ...identity, discoverable: false, hint: `configured intent not published: ${String(error)}` });
           }

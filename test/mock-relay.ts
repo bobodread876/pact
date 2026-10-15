@@ -39,11 +39,17 @@ function matches(event: StoredEvent, filter: Filter): boolean {
 export interface MockRelay {
   url: string;
   events: StoredEvent[];
+  /** Number of REQ subscriptions received so far (to assert "no relay round trip"). */
+  reqCount(): number;
+  /** When true, every EVENT is answered OK=false and not stored (a relay that rejects writes). */
+  setRejectEvents(reject: boolean): void;
   close(): Promise<void>;
 }
 
 export function startMockRelay(): Promise<MockRelay> {
   const events: StoredEvent[] = [];
+  let reqs = 0;
+  let rejectEvents = false;
   const wss = new WebSocketServer({ port: 0 });
 
   wss.on('connection', (ws) => {
@@ -56,6 +62,10 @@ export function startMockRelay(): Promise<MockRelay> {
       }
       if (msg[0] === 'EVENT' && msg[1]) {
         const event = msg[1] as StoredEvent;
+        if (rejectEvents) {
+          ws.send(JSON.stringify(['OK', event.id, false, 'blocked: test relay rejects writes']));
+          return;
+        }
         // Addressable kinds (30000–39999): replace prior (author, d) event.
         if (event.kind >= 30000 && event.kind < 40000) {
           const d = tagValues(event, 'd')[0];
@@ -67,6 +77,7 @@ export function startMockRelay(): Promise<MockRelay> {
         events.push(event);
         ws.send(JSON.stringify(['OK', event.id, true, '']));
       } else if (msg[0] === 'REQ' && typeof msg[1] === 'string') {
+        reqs += 1;
         const subId = msg[1];
         const filter = (msg[2] ?? {}) as Filter;
         const matched = events.filter((e) => matches(e, filter)).slice(0, filter.limit ?? 500);
@@ -84,6 +95,10 @@ export function startMockRelay(): Promise<MockRelay> {
       resolve({
         url: `ws://127.0.0.1:${port}`,
         events,
+        reqCount: () => reqs,
+        setRejectEvents: (reject: boolean) => {
+          rejectEvents = reject;
+        },
         close: () =>
           new Promise<void>((done) => {
             for (const client of wss.clients) client.terminate();

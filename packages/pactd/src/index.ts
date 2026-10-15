@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { hasIdentity, loadSecret } from 'pact-core';
 
-import { applyConfiguredIntent, configuredIntent } from './intentconfig.js';
+import { applyConfiguredIntent, configuredIntent, publishedStatus } from './intentconfig.js';
 import { createDaemon, currentRelays, VERSION } from './server.js';
 
 // Sovereign default: bind to loopback only. Never expose to 0.0.0.0 without auth.
@@ -19,7 +19,13 @@ server.listen(PORT, HOST, () => {
   if (configuredIntent() && hasIdentity()) {
     applyConfiguredIntent(loadSecret(), currentRelays())
       .then((r) => {
-        if (r) process.stderr.write(`pactd: published configured bond intent (seeking ${r.seeking.join(', ')})\n`);
+        if (!r) return;
+        const status = publishedStatus(r);
+        process.stderr.write(
+          status.discoverable
+            ? `pactd: published configured bond intent (seeking ${r.seeking.join(', ')})\n`
+            : `pactd: configured bond intent not accepted by any relay: ${status.hint}\n`,
+        );
       })
       .catch((error) => process.stderr.write(`pactd: configured bond intent not published: ${String(error)}\n`));
   }

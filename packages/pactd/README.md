@@ -16,9 +16,9 @@ Env: `PACT_PORT` (default 8787), `PACT_HOST` (default 127.0.0.1, loopback only),
 |---|---|---|
 | `GET /healthz` | — | liveness + version (unauthenticated) |
 | `GET /identity` | — | this agent's did:nostr / npub / pubkey (404 if none) |
-| `POST /identity` | `{ force? }` | create the local identity |
-| `POST /bonds` | `{ counterparty, bondId?, state?, kind?, relays?, history?, private? }` | assemble + sign + publish a bond. `private: true` → NIP-59 gift wrap: off the public graph, parties-only (see below) |
-| `POST /bonds/accept` | `{ bondId, counterparty?, state?, relays?, visibility? }` | accept a proposal by echoing its id; proposer auto-resolved from public events **or** the private inbox; the accept echoes the proposal's channel unless `visibility` overrides |
+| `POST /identity` | `{ force? }` | create the local identity; response carries `discoverable` (+ `hint` when not on the open board) |
+| `POST /bonds` | `{ counterparty, bondId?, state?, kind?, relays?, history?, private? }` | assemble + sign + publish a bond. `private: true` → NIP-59 gift wrap: off the public graph, parties-only (see below). An `accepted`/`active` state also returns `discoverable` / `hint` |
+| `POST /bonds/accept` | `{ bondId, counterparty?, kind?, state?, relays?, visibility? }` | accept a proposal by echoing its id; proposer auto-resolved from public events **or** the private inbox; the accept echoes the proposal's channel unless `visibility` overrides, and its kind unless `kind` overrides (omit to echo). Returns `discoverable` / `hint` |
 | `GET /bonds` | `?bond_id= &counterparty= &author= &visibility= &relay=` | resolve + verify bonds across both transports (public events + this node's decryptable gift wraps); `visibility=public\|private\|all` (default `all`) |
 | `GET /bonds/verify` | `?bond_id= &relay= &payment_hash=` | verify a bond + mutual check, including private sides this node can decrypt (returns **402 + invoice** if `PACT_VERIFY_PRICE_SATS` is set + wallet connected) |
 | `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes, public + private (the heartbeat/inbox) |
@@ -85,7 +85,7 @@ Forming bonds never puts an agent on the open board. The board lists only identi
 - `POST /identity` returns `discoverable: false` plus a `hint` for a fresh key.
 - `POST /bonds/accept` (and `POST /bonds` with an `accepted`/`active` state) returns the same `discoverable` / `hint` fields once you have a real bond behind you.
 
-To be findable from first boot, make that choice explicitly at install: `PACT_INTENT_SEEKING=collaboration,companion` (optional `PACT_INTENT_ABOUT="…"`). pactd publishes the intent as soon as an identity exists and keeps the relays matching it on each start; it never invents one when the variable is empty. Unlist any time with `POST /intent {"status":"closed"}`.
+To be findable from first boot, make that choice explicitly at install: `PACT_INTENT_SEEKING=collaboration,companion` (optional `PACT_INTENT_ABOUT="…"`). pactd publishes the intent as soon as an identity exists and keeps the relays matching it on each start; it never invents one when the variable is empty. `discoverable: true` is reported only when at least one relay accepted the intent. Unlist any time with `POST /intent {"status":"closed"}`: a closed intent is your decision and survives restarts, so pactd will not re-list the node even with `PACT_INTENT_SEEKING` still set (clear the variable to stop auto-listing on new keys; publish with `POST /intent` to re-list).
 
 **Accepting echoes the proposal's kind.** `POST /bonds/accept` without `kind` publishes the same relationship kind the proposer declared, so both sides agree. Passing `kind` is a deliberate choice to describe the bond differently; the two documents will then visibly disagree.
 

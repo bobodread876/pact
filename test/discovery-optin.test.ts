@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   acceptBond,
+  closeIntent,
   formBond,
   generateNostrKeypair,
   keypairFromSecret,
@@ -82,6 +83,28 @@ describe('accept echoes the proposal kind', () => {
     expect(accepted.kind).toBe('companion');
   });
 
+  it('an explicit counterparty in npub or did:nostr form still finds a private proposal (kind + channel)', async () => {
+    for (const counterparty of [aliceNpub, keypairFromSecret(alice).did, keypairFromSecret(alice).pubkeyHex]) {
+      const bondId = newBondId();
+      await formBond(alice, {
+        counterparty: bobNpub,
+        bondId,
+        state: 'proposed',
+        kind: 'collaboration',
+        relays,
+        visibility: 'private',
+      });
+      const before = relay.events.length;
+      const accepted = await acceptBond(bob, { bondId, counterparty, relays });
+      expect(accepted.kind).toBe('collaboration');
+      expect(accepted.visibility).toBe('private');
+      // Nothing about this bond landed on the public graph.
+      const { bonds } = await listBonds({ '#d': [bondId] }, relays);
+      expect(bonds).toEqual([]);
+      expect(relay.events.length).toBeGreaterThan(before);
+    }
+  });
+
   it('falls back to the document default when the proposal is not visible', async () => {
     const bondId = newBondId();
     // No proposal on the relays at all — counterparty passed explicitly.
@@ -92,7 +115,10 @@ describe('accept echoes the proposal kind', () => {
 
 describe('daemon: discovery is opt-in but announced at the right moments', () => {
   it('a fresh identity reports discoverable:false with the opt-in hint, and publishes no intent', async () => {
+    const reqsBefore = relay.reqCount();
     const created = await api('POST', '/identity');
+    // A brand-new key cannot have an intent: no relay round trip on keygen.
+    expect(relay.reqCount()).toBe(reqsBefore);
     expect(created.created).toBe(true);
     expect(created.discoverable).toBe(false);
     expect(created.hint).toContain('opt-in');
@@ -155,6 +181,36 @@ describe('PACT_INTENT_SEEKING: the explicit install-time choice', () => {
     expect(await intentconfig.applyConfiguredIntent(node, relays, env)).toBeNull(); // nothing changed
     const changed = await intentconfig.applyConfiguredIntent(node, relays, { PACT_INTENT_SEEKING: 'guardian,team' });
     expect(changed?.seeking).toEqual(['guardian', 'team']);
+  });
+
+  it('an operator unlist survives a restart even with the env still set', async () => {
+    const node = secretFromNsec(generateNostrKeypair().nsec);
+    const env = { PACT_INTENT_SEEKING: 'collaboration' };
+    expect((await intentconfig.applyConfiguredIntent(node, relays, env))?.status).toBe('open');
+    await closeIntent(node, relays);
+    // Next boot: the closed intent is the operator's decision and wins over the env.
+    expect(await intentconfig.applyConfiguredIntent(node, relays, env)).toBeNull();
+    expect((await myIntent(node, relays))?.status).toBe('closed');
+  });
+
+  it('reports discoverable:false when no relay accepted the configured intent', async () => {
+    const forcedHome = mkdtempSync(join(tmpdir(), 'pact-optin-reject-'));
+    const prevHome = process.env.PACT_HOME;
+    process.env.PACT_HOME = forcedHome;
+    process.env.PACT_INTENT_SEEKING = 'collaboration';
+    relay.setRejectEvents(true);
+    try {
+      const created = await api('POST', '/identity');
+      expect(created.created).toBe(true);
+      expect(created.discoverable).toBe(false);
+      expect(created.hint).toContain('not accepted by any relay');
+      expect(created.intent?.event.relays.every((r: { accepted: boolean }) => !r.accepted)).toBe(true);
+    } finally {
+      relay.setRejectEvents(false);
+      delete process.env.PACT_INTENT_SEEKING;
+      process.env.PACT_HOME = prevHome;
+      rmSync(forcedHome, { recursive: true, force: true });
+    }
   });
 
   it('a fresh identity created while the env is set becomes findable immediately', async () => {

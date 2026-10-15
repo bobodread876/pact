@@ -46,8 +46,17 @@ export async function discoveryStatus(secret: Uint8Array, relays: string[]): Pro
   return open ? { discoverable: true } : { discoverable: false, hint: NOT_DISCOVERABLE_HINT };
 }
 
-function sameIntent(a: ConfiguredIntent, b: { seeking?: string[]; about?: string; status?: string } | null): boolean {
-  if (!b || b.status === 'closed') return false;
+/** Whether a publish actually landed somewhere: at least one relay accepted it. */
+export function publishedStatus(result: PublishIntentResult | null): DiscoveryStatus {
+  if (result && result.status === 'open' && result.event.relays.some((r) => r.accepted)) return { discoverable: true };
+  const relayNotes = result?.event.relays.map((r) => `${r.relay}: ${r.message || 'rejected'}`).join('; ');
+  return {
+    discoverable: false,
+    hint: relayNotes ? `${NOT_DISCOVERABLE_HINT} Configured intent was not accepted by any relay (${relayNotes}).` : NOT_DISCOVERABLE_HINT,
+  };
+}
+
+function sameIntent(a: ConfiguredIntent, b: { seeking?: string[]; about?: string; status?: string }): boolean {
   const bs = [...(b.seeking ?? [])].sort();
   const as = [...a.seeking].sort();
   return as.length === bs.length && as.every((k, i) => k === bs[i]) && (a.about ?? '') === (b.about ?? '');
@@ -57,6 +66,10 @@ function sameIntent(a: ConfiguredIntent, b: { seeking?: string[]; about?: string
  * Publish the operator-configured intent if one is set and the relays don't
  * already carry it. Returns null when nothing is configured or nothing changed.
  * Idempotent: safe to call on every startup.
+ *
+ * A closed intent on the relays is an operator decision ("unlist"), and it
+ * wins over the env: the node is never put back on the board on restart. To
+ * re-list, the operator publishes an intent explicitly (POST /intent).
  */
 export async function applyConfiguredIntent(
   secret: Uint8Array,
@@ -66,6 +79,7 @@ export async function applyConfiguredIntent(
   const wanted = configuredIntent(env);
   if (!wanted) return null;
   const current = await myIntent(secret, relays);
-  if (sameIntent(wanted, current)) return null;
+  if (current?.status === 'closed') return null;
+  if (current && sameIntent(wanted, current)) return null;
   return publishIntent(secret, { seeking: wanted.seeking, about: wanted.about, relays });
 }

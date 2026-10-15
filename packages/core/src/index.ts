@@ -36,6 +36,7 @@ import {
   buildBondStateEvent,
   buildPrivateBondEvents,
   keypairFromSecret,
+  pubkeyHexFromIdentity,
   publishEvent,
   resolveEvents,
   signMateDocumentNostr,
@@ -318,10 +319,14 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
       counterparty = proposers[0];
     }
 
+    // The caller may pass did:nostr / npub / hex; event authors are hex. Normalize
+    // once so an explicit counterparty finds its proposal (and its channel + kind).
+    const counterpartyHex = pubkeyHexFromIdentity(counterparty);
+    const proposal = inbound.find((b) => b.author === counterpartyHex);
+
     if (!visibility) {
       // Echo the channel the (resolved) proposer used; default public when the
       // proposal isn't visible to us at all.
-      const proposal = inbound.find((b) => b.author === counterparty);
       visibility = proposal?.visibility ?? 'public';
     }
 
@@ -329,7 +334,6 @@ export async function acceptBond(secret: Uint8Array, input: AcceptBondInput): Pr
       // Echo the proposer's kind. Falls back to the document default when the
       // proposal isn't visible to us (the caller passed counterparty for a
       // proposal we can't resolve) — the explicit `kind` input overrides both.
-      const proposal = inbound.find((b) => b.author === counterparty);
       kind = proposal?.kind ?? undefined;
     }
   }
