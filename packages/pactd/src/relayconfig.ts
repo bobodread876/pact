@@ -12,6 +12,23 @@ function configPath(): string {
   return join(pactHome(), 'relays.json');
 }
 
+/** Only bare ws:// and wss:// URLs parse: no userinfo, no whitespace/control
+ * chars. Anything else → undefined, so a hostile relay value can never become
+ * a dial target (SSRF guard). */
+export function sanitizeRelayUrl(raw: string): string | undefined {
+  const s = raw.trim();
+  if (!s || /[\s\x00-\x1f]/.test(s)) return undefined;
+  let url: URL;
+  try {
+    url = new URL(s);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') return undefined;
+  if (url.username || url.password) return undefined;
+  return s;
+}
+
 function loadSaved(): string[] | undefined {
   try {
     if (existsSync(configPath())) {
@@ -38,7 +55,16 @@ export function resolveRelays(): string[] {
   const saved = loadSaved();
   if (saved) return saved;
   if (process.env.PACT_RELAYS) {
-    return process.env.PACT_RELAYS.split(',').map((r) => r.trim()).filter(Boolean);
+    const relays: string[] = [];
+    for (const raw of process.env.PACT_RELAYS.split(',')) {
+      const r = sanitizeRelayUrl(raw);
+      if (r) {
+        relays.push(r);
+      } else if (raw.trim()) {
+        process.stderr.write(`pactd: ignoring invalid PACT_RELAYS entry (need ws:// or wss://): ${raw.trim()}\n`);
+      }
+    }
+    if (relays.length) return relays;
   }
   return DEFAULT_RELAYS;
 }
