@@ -82,6 +82,10 @@ export interface ListBondsArgs {
 export interface BondQueryResult {
   relaysReached: string[];
   bonds: BondView[];
+  /** The private inbox could not be read to the end: private sides may be missing. */
+  inboxTruncated?: boolean;
+  /** Relays asked for the private inbox that never served it (see core VerifyBondResult). */
+  inboxRelaysUnread?: string[];
 }
 
 /**
@@ -174,7 +178,7 @@ export class Pact {
         : await coreListBonds(filter, relays);
     const priv =
       visibility === 'public'
-        ? { relaysReached: [] as string[], bonds: [] as BondView[] }
+        ? { relaysReached: [] as string[], bonds: [] as BondView[], truncated: false, inboxRelaysUnread: [] as string[] }
         : await coreListPrivateBonds(this.secret, relays, {
             bondId: args.bondId,
             author: args.author,
@@ -184,6 +188,8 @@ export class Pact {
     return {
       relaysReached: [...new Set([...pub.relaysReached, ...priv.relaysReached])],
       bonds: [...pub.bonds, ...priv.bonds].sort((a, b) => b.created_at - a.created_at),
+      ...(priv.truncated ? { inboxTruncated: true } : {}),
+      ...(priv.inboxRelaysUnread.length ? { inboxRelaysUnread: priv.inboxRelaysUnread } : {}),
     };
   }
 
@@ -222,6 +228,8 @@ export class Pact {
       history?: boolean;
       relays?: string[];
       visibility?: BondVisibility;
+      /** Deliberate operator override: accept on a partially-read private inbox (see core AcceptBondInput). */
+      allowIncompleteInbox?: boolean;
     } = {},
   ): Promise<FormBondResult> {
     return coreAcceptBond(this.secret, {
@@ -232,16 +240,19 @@ export class Pact {
       history: opts.history,
       relays: opts.relays ?? this.relays,
       visibility: opts.visibility,
+      allowIncompleteInbox: opts.allowIncompleteInbox,
     });
   }
 
   /**
    * Reaffirm a bond — publish `bond.reaffirmed`, the deliberate act of
-   * choosing the bond again. Follows the bond's channel.
+   * choosing the bond again. Follows the bond's channel: unless both
+   * `counterparty` and `visibility` are given, the bond is resolved from this
+   * identity's view and must be mutual (never guessed public).
    */
   reaffirmBond(
     bondId: string,
-    opts: { counterparty: string; visibility?: BondVisibility; relays?: string[] },
+    opts: { counterparty?: string; visibility?: BondVisibility; relays?: string[] } = {},
   ): Promise<ReaffirmBondResult> {
     return coreReaffirmBond(this.secret, {
       bondId,
@@ -252,7 +263,9 @@ export class Pact {
   }
 
   /** Reaffirmations visible to this identity, latest-per-(bond, author). */
-  listReaffirmations(relays?: string[]): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[] }> {
+  listReaffirmations(
+    relays?: string[],
+  ): Promise<{ relaysReached: string[]; reaffirmations: ReaffirmationView[]; truncated?: boolean; inboxRelaysUnread?: string[] }> {
     return coreListReaffirmations(this.secret, relays ?? this.relays);
   }
 
@@ -287,7 +300,7 @@ export class Pact {
 
   /**
    * Poll the inbox on an interval, invoking `onBond` once per newly-seen bond
-   * state (keyed by bond id + author). Returns a `stop()` function. A simple
+   * state (keyed by bond id + author + channel). Returns a `stop()` function. A simple
    * poll loop — for a long-lived push stream, pactd's `/events` SSE is the
    * heavier option.
    */
@@ -302,7 +315,9 @@ export class Pact {
       try {
         const { bonds } = await this.inbox(opts.relays);
         for (const b of bonds) {
-          const key = `${b.bond}:${b.author}`;
+          // Visibility is part of the key: a counterparty can hold a public
+          // and a private side for one bond, in different states.
+          const key = `${b.bond}:${b.author}:${b.visibility}`;
           if (seen.get(key) !== (b.state ?? '')) {
             seen.set(key, b.state ?? '');
             if (!stopped) onBond(b);

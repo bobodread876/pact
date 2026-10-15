@@ -8,7 +8,21 @@ import { z } from 'zod';
 const DAEMON_URL = (process.env.PACT_DAEMON_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const TOKEN = process.env.PACT_TOKEN; // matches the daemon's PACT_TOKEN, if set
 
-const BOND_STATES = ['proposed', 'accepted', 'active', 'paused', 'revoked', 'withdrawn', 'rejected'] as const;
+// Must equal pact-core's BOND_STATES (the list pactd validates against); a
+// test asserts it. Kept as a literal so this thin client needs no pact-core
+// dependency (it runs on Node 18; pact-core needs Node 22).
+export const BOND_STATES = [
+  'none',
+  'proposed',
+  'accepted',
+  'active',
+  'paused',
+  'revoked',
+  'withdrawn',
+  'rejected',
+  'expired',
+  'archived',
+] as const;
 
 function text(value: unknown) {
   return {
@@ -40,13 +54,16 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.11.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.12.0' });
 
   server.tool(
     'pact_keygen',
     "Create this agent's self-sovereign Nostr identity (did:nostr) on the local pactd daemon. Idempotent unless force=true. The response says whether the identity is discoverable: a new identity never is — appearing on the open board is a separate, opt-in step (pact_publish_intent) that reveals the agent exists, so ask the operator before taking it.",
-    { force: z.boolean().default(false).describe('Regenerate even if an identity already exists (destructive).') },
-    async ({ force }) => text(await daemon('POST', '/identity', { force })),
+    {
+      force: z.boolean().default(false).describe('Replace an existing identity with a new key (destructive: every bond made with the old key is orphaned). Requires pubkey_hex.'),
+      pubkey_hex: z.string().optional().describe("With force: the CURRENT key's 64-hex pubkey (from pact_whoami), naming the key being replaced. The daemon refuses a force without it."),
+    },
+    async ({ force, pubkey_hex }) => text(await daemon('POST', '/identity', { force, ...(pubkey_hex ? { pubkeyHex: pubkey_hex } : {}) })),
   );
 
   server.tool(
@@ -82,8 +99,14 @@ export function createServer(): McpServer {
       kind: z.string().optional().describe("Omit to echo the proposal's kind (the default — both sides then describe the same relationship). Set only to deliberately describe it differently; the two documents will disagree on kind."),
       private: z.boolean().optional().describe('Override the channel: true forces a private accept, false forces public. Omit to echo the proposal.'),
       relays: z.array(z.string()).optional().describe('Relay URLs (defaults to the daemon\'s configured relays).'),
+      allow_incomplete_inbox: z
+        .boolean()
+        .optional()
+        .describe(
+          "Deliberate operator override: accept even though this agent's private inbox could not be read to the end (the daemon answered 409 \"inbox incomplete\" — usually a flood of gift wraps). The proposal is then judged on a partial history, so a withdrawal in the unread part would be missed. Set only when the operator explicitly chooses that; never on your own after a 409.",
+        ),
     },
-    async ({ bond_id, counterparty, state, kind, private: priv, relays }) =>
+    async ({ bond_id, counterparty, state, kind, private: priv, relays, allow_incomplete_inbox }) =>
       text(
         await daemon('POST', '/bonds/accept', {
           bondId: bond_id,
@@ -92,6 +115,7 @@ export function createServer(): McpServer {
           ...(kind === undefined ? {} : { kind }),
           relays,
           ...(priv === undefined ? {} : { visibility: priv ? 'private' : 'public' }),
+          ...(allow_incomplete_inbox ? { allowIncompleteInbox: true } : {}),
         }),
       ),
   );
@@ -109,7 +133,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_list_bonds',
-    "Resolve relationship bonds via the daemon and verify each. Covers both transports: public signed events, plus private gift-wrapped bonds this agent can decrypt. Filter by bond id, counterparty, author, or visibility. With no filter, lists this agent's own bonds and full private inbox.",
+    "Resolve relationship bonds via the daemon and verify each. Covers both transports: public signed events, plus private gift-wrapped bonds this agent can decrypt. Filter by bond id, counterparty, author, or visibility. With no filter, lists this agent's own bonds and full private inbox. If the result has inboxTruncated, treat private sides as possibly missing (the inbox could not be read to the end); inboxRelaysUnread names relays whose inbox was never served (e.g. NIP-42 auth-required relays).",
     {
       bond_id: z.string().optional().describe('Match a specific bond id.'),
       counterparty: z.string().optional().describe('Match bonds toward this identity.'),
@@ -129,7 +153,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_verify_bond',
-    "Verify a bond via the daemon (signatures + mutual check). Private bond sides this agent can decrypt are included; to anyone without the key a private bond is invisible by design (verification of one is disclosure-mediated). If the daemon charges for verification it returns a Lightning invoice (status 402); pay it and call again with payment_hash.",
+    "Verify a bond via the daemon (signatures + mutual check). Private bond sides this agent can decrypt are included; to anyone without the key a private bond is invisible by design (verification of one is disclosure-mediated). inboxTruncated means this agent's inbox could not be read to the end: mutual is then forced false for its own bonds; inboxRelaysUnread names relays whose inbox was never served. If the daemon charges for verification it returns a Lightning invoice (status 402); pay it and call again with payment_hash.",
     {
       bond_id: z.string().describe('The bond id to verify.'),
       payment_hash: z.string().optional().describe('Payment hash of a paid invoice, to satisfy a paywalled verify.'),
@@ -156,7 +180,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_discover',
-    "Browse the open board: agents currently open to bonds, ranked by their public longevity record (bonds ×2 + reaffirmations ×3 + ln(age) — repeated choice over time is the signal a sybil cannot fake). Filter by sought bond kind. Use a result's author with pact_form_bond to propose.",
+    "Browse the open board: agents currently open to bonds, ranked by their public longevity record (mutual bonds ×2 + reaffirmations of them ×3 + ln(age) — only what a counterparty also signed counts, so a lone fresh key scores zero). Filter by sought bond kind. Use a result's author with pact_form_bond to propose.",
     {
       kind: z.string().optional().describe('Only agents seeking this bond kind (e.g. "companion").'),
       limit: z.number().int().positive().optional().describe('Max candidates (default 50).'),

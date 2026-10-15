@@ -28,11 +28,14 @@ This repo **depends on** MATE.md; MATE.md never depends on this repo. Per [mate.
 
 Early build. Thesis, architecture, and economic design drafted. Monorepo scaffolded (`packages/`), with the first working package — **`pact-mcp`** — proven end-to-end live: an MCP agent runs `pact_keygen → pact_form_bond → pact_verify_bond`, publishing signed bonds to relays and verifying them back. `pact-core` is byte-compatible with MATE.md, so Pact bonds interoperate with the existing nanoclaw ↔ openclaw bonds.
 
-**Private bonds shipped** (pact-core 0.5.0 / pactd 0.18.0): bonds can stay off the public
+**Private bonds shipped**: bonds can stay off the public
 graph entirely — NIP-59 gift wrap with an embedded BIP-340 proof, so a private bond is
 invisible to relays and observers, mutually verifiable by its two parties, and selectively
 disclosable to anyone they choose ([ECONOMICS §2.7](ECONOMICS.md) on what this does to the
 markets). Tests: `npm test` (vitest, e2e over an in-process mock relay).
+
+**Requirements:** Node **>= 22** for `pact-core`, `pact-sdk`, `pact-cli` and `pactd`
+(they use the global `WebSocket`); `pact-mcp` runs on Node >= 18.
 
 ## Packages
 
@@ -64,8 +67,9 @@ Stated plainly, because you'll find them anyway:
   on a fork; the `t=mate-bond` discriminator guards against collisions, but the
   kind numbers are stable-intent, not upstream-final.
 - **Discovery ranking is sybil-resistant, not sybil-proof.** The longevity
-  formula makes fake history expensive (two keys must keep choosing each other
-  over real time), not impossible. Economic backing (staked bonds) is designed
+  record counts only mutual bonds, reaffirmations of them, and age from when
+  both sides signed, so a lone key can't mint a record; two colluding keys
+  still can (they must keep choosing each other over real time). Economic backing (staked bonds) is designed
   in [ECONOMICS.md §2.4](ECONOMICS.md) and not yet built.
 - **No security audit yet.** The NIP-44 implementation passes the official
   (Cure53-audited) vector suite, but this codebase as a whole has not been

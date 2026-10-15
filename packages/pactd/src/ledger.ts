@@ -3,7 +3,7 @@
 // activity, so the agent never sees unrelated transactions from other apps
 // sharing the same NWC wallet/node. Sovereign: local-only, in PACT_HOME.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { pactHome } from 'pact-core';
@@ -55,7 +55,20 @@ export function ownsPaymentHash(hash: string | undefined | null): boolean {
 interface VerificationInvoice {
   bondId: string;
   consumed: boolean;
+  /** When the invoice was issued (ms since epoch). Absent on pre-0.20.1 entries. */
+  issuedAt?: number;
+  /** Client address the invoice was issued to (per-client pending cap). Absent on older entries. */
+  client?: string;
 }
+
+/** Expiry requested for verification invoices (seconds). */
+export const VERIFICATION_INVOICE_EXPIRY_SECS = 3600;
+/**
+ * How long an unredeemed entry is kept after issue. Longer than the invoice
+ * expiry, so a buyer who paid just before it expired can still redeem; after
+ * this the invoice can no longer be paid and the entry is dead weight.
+ */
+const UNREDEEMED_RETENTION_MS = (VERIFICATION_INVOICE_EXPIRY_SECS + 24 * 3600) * 1000;
 
 function verificationsPath(): string {
   return join(pactHome(), 'verifications.json');
@@ -75,21 +88,66 @@ function loadVerifications(): Map<string, VerificationInvoice> {
   return vcache;
 }
 
+/**
+ * Persist the verification ledger atomically (temp file + rename). Throws on
+ * failure: the single-use guarantee is only as good as this write, so a
+ * read-only or full PACT_HOME must fail the request, not silently degrade to
+ * an in-memory ledger that a restart forgets.
+ */
 function persistVerifications(map: Map<string, VerificationInvoice>): void {
-  try {
-    mkdirSync(pactHome(), { recursive: true });
-    writeFileSync(verificationsPath(), JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
-  } catch {
-    // best effort
+  pruneVerifications(map, Date.now());
+  mkdirSync(pactHome(), { recursive: true });
+  const tmp = `${verificationsPath()}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)), { mode: 0o600 });
+  renameSync(tmp, verificationsPath());
+}
+
+/**
+ * Drop unredeemed entries past retention, so anonymous 402 requests can't grow
+ * the ledger (and every rewrite of it) without bound. Redeemed entries stay:
+ * they are what makes an invoice single-use. Legacy entries with no issuedAt
+ * are stamped now, so they age out on the same clock.
+ */
+function pruneVerifications(map: Map<string, VerificationInvoice>, now: number): void {
+  for (const [hash, v] of map) {
+    if (v.consumed) continue;
+    if (v.issuedAt === undefined) v.issuedAt = now;
+    else if (now - v.issuedAt > UNREDEEMED_RETENTION_MS) map.delete(hash);
   }
 }
 
+/** Unredeemed verification invoices that can still be paid (issued within the expiry). */
+export function pendingVerificationCount(now = Date.now()): number {
+  return pendingVerificationCountFor(undefined, now);
+}
+
+/**
+ * Unredeemed, unexpired invoices issued to one client address — or to anyone
+ * when `client` is undefined. One address may hold only a small share of the
+ * global pool, so it can't lock every other buyer out by filling it.
+ */
+export function pendingVerificationCountFor(client: string | undefined, now = Date.now()): number {
+  let n = 0;
+  for (const v of loadVerifications().values()) {
+    if (v.consumed) continue;
+    if (v.issuedAt !== undefined && now - v.issuedAt > VERIFICATION_INVOICE_EXPIRY_SECS * 1000) continue;
+    if (client !== undefined && v.client !== client) continue;
+    n++;
+  }
+  return n;
+}
+
 /** Record an invoice issued to gate verification of a specific bond. */
-export function recordVerificationInvoice(hash: string, bondId: string): void {
+export function recordVerificationInvoice(hash: string, bondId: string, now = Date.now(), client?: string): void {
   const map = loadVerifications();
   if (map.has(hash)) return;
-  map.set(hash, { bondId, consumed: false });
-  persistVerifications(map);
+  map.set(hash, { bondId, consumed: false, issuedAt: now, ...(client ? { client } : {}) });
+  try {
+    persistVerifications(map);
+  } catch (error) {
+    map.delete(hash);
+    throw error;
+  }
 }
 
 export type VerificationStatus = 'ok' | 'unknown' | 'wrong_bond' | 'spent';
@@ -106,14 +164,21 @@ export function verificationStatus(hash: string, bondId: string): VerificationSt
 /**
  * Authoritative single-use gate. Synchronous (no await between check and set),
  * so concurrent requests for the same hash serialize: the first consumes and
- * returns true, any other sees `consumed` and returns false. Call only after
- * the invoice is confirmed paid.
+ * returns true, any other sees `consumed` and returns false. Throws when the
+ * consumption can't be persisted. Call only after the invoice is confirmed paid.
  */
 export function consumeVerification(hash: string, bondId: string): boolean {
   const map = loadVerifications();
   const v = map.get(hash);
   if (!v || v.bondId !== bondId || v.consumed) return false;
   v.consumed = true;
-  persistVerifications(map);
+  try {
+    persistVerifications(map);
+  } catch (error) {
+    // Not durably consumed → don't serve it (a restart would let it redeem
+    // again). Roll back so a retry after the disk recovers still works.
+    v.consumed = false;
+    throw error;
+  }
   return true;
 }

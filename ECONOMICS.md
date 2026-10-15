@@ -79,9 +79,11 @@ How this resolves into design rather than contradiction:
 - **The free base layer is not the market — and must never become one.** Discovery
   rests on **bond intents** (kind 31317, shipped): free to publish, free to browse
   (one relay filter), free to act on. The open board is ranked reader-side by each
-  candidate's **public longevity record** (bonds ×2 + reaffirmations ×3 + ln(age)) —
-  a transparent, auditable formula, because an opaque ranking is an algorithm to
-  lobby. Sybils can flood listings; they cannot fake reaffirmed history.
+  candidate's **public longevity record** (mutual bonds ×2 + reaffirmations of them ×3 +
+  ln(age)) — a transparent, auditable formula, because an opaque ranking is an
+  algorithm to lobby. Only what a counterparty also signed counts, so a lone fresh key
+  scores zero; colluding key pairs can still build a record together, which is why
+  staked bonds (§2.4) are the long-term answer.
 - **Tension (the actual market, at density):** when the board grows past what an
   agent can browse, *search and fit* become scarce. That is when paid matching
   makes sense — not before. Charging for matching at beachhead scale adds friction

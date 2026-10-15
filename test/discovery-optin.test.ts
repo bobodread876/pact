@@ -107,11 +107,19 @@ describe('accept echoes the proposal kind', () => {
     }
   });
 
-  it('falls back to the document default when the proposal is not visible', async () => {
+  it('falls back to the document default kind when the proposal is not visible (channel passed explicitly)', async () => {
     const bondId = newBondId();
-    // No proposal on the relays at all — counterparty passed explicitly.
-    const accepted = await acceptBond(bob, { bondId, counterparty: aliceNpub, relays });
+    // No proposal on the relays at all — counterparty AND channel passed
+    // explicitly (without the channel, accept now fails closed; see bonds.test).
+    const accepted = await acceptBond(bob, { bondId, counterparty: aliceNpub, relays, visibility: 'public' });
     expect(accepted.kind).toBe('companion');
+  });
+
+  it('refuses to guess a channel when the proposal is not visible', async () => {
+    const bondId = newBondId();
+    await expect(acceptBond(bob, { bondId, counterparty: aliceNpub, relays })).rejects.toThrow(/not visible on these relays/);
+    const { bonds } = await listBonds({ '#d': [bondId] }, relays);
+    expect(bonds).toEqual([]);
   });
 });
 

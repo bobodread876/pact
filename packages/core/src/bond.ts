@@ -2,17 +2,29 @@
 
 import type { MateDocument } from '@mate-protocol/core';
 
-export type BondState =
-  | 'none'
-  | 'proposed'
-  | 'accepted'
-  | 'active'
-  | 'paused'
-  | 'revoked'
-  | 'withdrawn'
-  | 'rejected'
-  | 'expired'
-  | 'archived';
+/**
+ * Every legal bond state, in lifecycle order. The one list every surface
+ * (daemon, CLI, MCP) validates against, so they agree on what is publishable.
+ */
+export const BOND_STATES = [
+  'none',
+  'proposed',
+  'accepted',
+  'active',
+  'paused',
+  'revoked',
+  'withdrawn',
+  'rejected',
+  'expired',
+  'archived',
+] as const;
+
+export type BondState = (typeof BOND_STATES)[number];
+
+/** Whether `value` is one of BOND_STATES. */
+export function isBondState(value: unknown): value is BondState {
+  return typeof value === 'string' && (BOND_STATES as readonly string[]).includes(value);
+}
 
 /** bond.kind from an event's carried MATE.md document content, if parseable. */
 export function kindFromContent(content: string): string | null {

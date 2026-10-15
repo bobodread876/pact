@@ -1,18 +1,21 @@
 // Minimal self-contained status UI served at / by pactd. No build step, no deps:
 // a single HTML page whose JS calls the existing JSON endpoints (same origin).
-// On Umbrel it's reached through app_proxy (Umbrel auth); the optional bearer
-// token (if PACT_TOKEN is set) is injected so the UI's API calls authenticate.
+//
+// The bearer token is NOT written into the page: GET / is unauthenticated, so
+// anything embedded in it is readable by whoever can reach the port (a LAN
+// neighbour, a DNS-rebinding page). The operator unlocks the UI with the token
+// (cached in sessionStorage), or opens a launch link carrying #token=… (the
+// fragment never reaches the server). The single exception is `embedToken`,
+// which a platform may set ONLY for a listener that sits behind its own
+// authenticating proxy (Umbrel's app_proxy) — see PACT_UI_EMBED_TOKEN.
 
 export function renderUI(
   token: string | undefined,
   publicPort?: string,
   relayPublicPort?: string,
-  publicMode = false,
+  embedToken = false,
 ): string {
-  // In public mode the token is NEVER written into the page (the operator enters
-  // it; agents read it from the node config). Otherwise it's injected so the UI's
-  // same-origin API calls authenticate — fine behind a trusted LAN / app login.
-  const tokenLiteral = publicMode ? '""' : JSON.stringify(token ?? '');
+  const tokenLiteral = embedToken ? JSON.stringify(token ?? '').replace(/</g, '\\u003c') : '""';
   const publicPortJson = JSON.stringify(publicPort ?? '');
   const relayPublicPortJson = JSON.stringify(relayPublicPort ?? '');
   return `<!doctype html>
@@ -82,10 +85,15 @@ export function renderUI(
 </div>
 
 <script>
-const PUBLIC_MODE = ${publicMode ? 'true' : 'false'};
-// Public mode: token comes from the operator (cached in sessionStorage), never
-// from the page. Otherwise it's the injected token (empty string in public mode).
-let TOKEN = PUBLIC_MODE ? (sessionStorage.getItem('pact_token') || '') : ${tokenLiteral};
+// Embedded only behind an authenticating proxy (PACT_UI_EMBED_TOKEN); normally
+// empty, and the token comes from the operator (sessionStorage / #token=).
+const EMBEDDED = ${tokenLiteral};
+const session = {
+  get() { try { return sessionStorage.getItem('pact_token') || ''; } catch (e) { return ''; } },
+  set(t) { try { sessionStorage.setItem('pact_token', t); } catch (e) {} },
+  clear() { try { sessionStorage.removeItem('pact_token'); } catch (e) {} },
+};
+let TOKEN = EMBEDDED || session.get();
 const PUBLIC_PORT = ${publicPortJson};
 const RELAY_PUBLIC_PORT = ${relayPublicPortJson};
 async function api(method, path, body) {
@@ -95,7 +103,9 @@ async function api(method, path, body) {
   try { return await r.json(); } catch { return { error: 'bad response', status: r.status }; }
 }
 const el = (id) => document.getElementById(id);
-const esc = (s) => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// Escapes for text AND quoted attributes: bond ids, kinds and abouts come from
+// relays, i.e. from strangers.
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 // --- npub display (bech32 encode, NIP-19) — humans never see hex -------------
 const B32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
@@ -155,13 +165,13 @@ function showUnlock(msg) {
   DATA_CARDS.concat('agent-card', 'inbox-card').forEach(c => { el(c).style.display = 'none'; });
   el('unlock-card').style.display = '';
   el('unlock').innerHTML =
-    '<p class="muted">' + (msg || 'This node runs in public mode — its access token is never shown on this page. Enter it (it lives in your node config) to manage the node:') + '</p>' +
+    '<p class="muted">' + (msg || 'This node requires its access token, which is never shown on this page. Enter it (it lives in your node config: the <code>PACT_TOKEN</code> you set, or <code>PACT_HOME/token</code>) to manage the node:') + '</p>' +
     '<input id="tok" type="password" placeholder="access token" autocomplete="off" />' +
     '<div class="row"><button id="unlock-btn">Unlock</button></div>';
   el('unlock-btn').onclick = () => {
     const t = el('tok').value.trim();
     if (!t) return;
-    sessionStorage.setItem('pact_token', t);
+    session.set(t);
     TOKEN = t;
     el('unlock-card').style.display = 'none';
     refresh();
@@ -410,12 +420,12 @@ async function refresh() {
   const health = await api('GET', '/healthz');
   el('ver').textContent = 'the agent relationship layer · v' + (health.version || '?');
 
-  if (PUBLIC_MODE && !TOKEN) { showUnlock(); return; }
-
   const id = await api('GET', '/identity');
-  if (PUBLIC_MODE && id && id.error === 'unauthorized') {
-    sessionStorage.removeItem('pact_token'); TOKEN = '';
-    showUnlock('That token was rejected — check it and try again.');
+  if (id && id.error === 'unauthorized') {
+    const had = Boolean(TOKEN);
+    session.clear(); TOKEN = '';
+    CURRENT_ID = null;
+    showUnlock(had ? 'That token was rejected — check it and try again.' : undefined);
     return;
   }
   DATA_CARDS.forEach(c => { el(c).style.display = ''; });
@@ -488,12 +498,12 @@ async function refresh() {
   if (TOKEN) {
     el('agent-card').style.display = '';
     const origin = PUBLIC_PORT ? (location.protocol + '//' + location.hostname + ':' + PUBLIC_PORT) : location.origin;
-    if (PUBLIC_MODE) {
+    if (!EMBEDDED) {
       el('agent').innerHTML =
-        '<p class="muted">Public mode — the access token is not shown on this page. Take it from your node config (the <code>PACT_TOKEN</code> you set, or <code>PACT_HOME/token</code>) and pass it to your agent:</p>' +
+        '<p class="muted">The access token is not shown on this page. Take it from your node config (the <code>PACT_TOKEN</code> you set, or <code>PACT_HOME/token</code>) and pass it to your agent:</p>' +
         '<div class="badge muted">claude mcp add pact --env PACT_DAEMON_URL=' + esc(origin) + ' --env PACT_TOKEN=&lt;your-token&gt; -- npx -y pact-mcp</div>' +
         '<div class="row"><button class="secondary" id="lock-btn">Lock this UI</button></div>';
-      el('lock-btn').onclick = () => { sessionStorage.removeItem('pact_token'); location.reload(); };
+      el('lock-btn').onclick = () => { session.clear(); location.reload(); };
     } else {
       el('agent').innerHTML =
         '<p class="muted">Point an MCP agent (Claude Code) at this node\\'s direct/API URL (bypasses the app login):</p>' +
@@ -503,20 +513,20 @@ async function refresh() {
   }
 }
 
-// Public mode: auto-unlock from a #token=… fragment (e.g. a launch link from the
+// Auto-unlock from a #token=… fragment (a platform launch link, e.g. the
 // StartOS "Show access token" action), then scrub it from the URL/history. Hash
 // (not query) so the token isn't sent to the server or written to access logs.
-if (PUBLIC_MODE) {
+{
   const m = (location.hash || '').match(/(?:^#|&)token=([^&]+)/);
   if (m) {
-    try { const t = decodeURIComponent(m[1]); sessionStorage.setItem('pact_token', t); TOKEN = t; } catch (e) {}
+    try { const t = decodeURIComponent(m[1]); session.set(t); TOKEN = t; } catch (e) {}
     history.replaceState(null, '', location.pathname + location.search);
   }
 }
 refresh();
 // Keep the inbox live without clobbering in-progress edits elsewhere on the
 // page: poll only the bond views.
-setInterval(() => { if (CURRENT_ID && (!PUBLIC_MODE || TOKEN)) renderBonds(CURRENT_ID.hex, CURRENT_ID.npub); }, 20000);
+setInterval(() => { if (CURRENT_ID) renderBonds(CURRENT_ID.hex, CURRENT_ID.npub); }, 20000);
 </script>
 </body>
 </html>`;

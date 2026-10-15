@@ -1,8 +1,20 @@
 {
   "name": "pact-core",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Pact Core — the agent-relationship runtime engine (bonds over Nostr).",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bobodread876/pact.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/bobodread876/pact/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/bobodread876/pact/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,7 +25,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc"
