@@ -29,8 +29,10 @@ import {
 import { timingSafeEqual } from 'node:crypto';
 
 import {
+  VERIFICATION_INVOICE_EXPIRY_SECS,
   consumeVerification,
   ownsPaymentHash,
+  pendingVerificationCount,
   recordPaymentHash,
   recordVerificationInvoice,
   verificationStatus,
@@ -152,6 +154,37 @@ let lightning = lightningFrom(loadNwcUri());
 // Only enforced when a wallet is connected (otherwise there's no way to collect).
 const VERIFY_PRICE_SATS = Math.max(0, Math.floor(Number(process.env.PACT_VERIFY_PRICE_SATS) || 0));
 
+function positiveIntEnv(name: string, fallback: number): number {
+  const n = Math.floor(Number(process.env[name]));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// Anonymous callers can make the daemon create invoices in the operator's
+// wallet, so issuing is bounded: at most this many unredeemed, unexpired
+// verification invoices at once, and at most this many new ones per client
+// address per minute. Past either → 429.
+const VERIFY_MAX_PENDING = positiveIntEnv('PACT_VERIFY_MAX_PENDING', 200);
+const VERIFY_INVOICES_PER_MIN = positiveIntEnv('PACT_VERIFY_INVOICES_PER_MIN', 10);
+const invoiceRequests = new Map<string, number[]>();
+
+/** Sliding one-minute window per client address. True = allowed (and counted). */
+function takeInvoiceSlot(client: string, now = Date.now()): boolean {
+  const recent = (invoiceRequests.get(client) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= VERIFY_INVOICES_PER_MIN) {
+    invoiceRequests.set(client, recent);
+    return false;
+  }
+  recent.push(now);
+  invoiceRequests.set(client, recent);
+  if (invoiceRequests.size > 10_000) {
+    for (const [k, ts] of invoiceRequests) if (!ts.some((t) => now - t < 60_000)) invoiceRequests.delete(k);
+  }
+  return true;
+}
+
+/** Most `?party=` params a verify request may name. */
+const MAX_VERIFY_PARTIES = 10;
+
 // Active relay set. Resolution: relays.json (set via the UI / POST /relays) >
 // PACT_RELAYS env > the protocol defaults. Mutable so it can be (re)configured
 // at runtime — pick public relays, a bundled relay, or another relay app.
@@ -221,8 +254,11 @@ function authorized(req: IncomingMessage): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Most `?relay=` params one request may name (deduped). */
+const MAX_REQUEST_RELAYS = 10;
+
 function relaysFrom(url: URL): string[] {
-  const relays = url.searchParams.getAll('relay');
+  const relays = [...new Set(url.searchParams.getAll('relay'))].slice(0, MAX_REQUEST_RELAYS);
   return relays.length ? relays : RELAYS;
 }
 
@@ -286,7 +322,8 @@ export function createDaemon(options: DaemonOptions = {}) {
       // replaces the identity. They get the public verdict only — private
       // sides need this node's key, which is reserved for the operator.
       if (path === '/bonds/verify' && method === 'GET' && VERIFY_PRICE_SATS > 0) {
-        return await handleVerify(res, url, ln, authorized(req));
+        const authed = authorized(req);
+        return await handleVerify(res, url, ln, { authed, client: req.socket.remoteAddress ?? 'unknown' });
       }
 
       if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
@@ -483,7 +520,7 @@ export function createDaemon(options: DaemonOptions = {}) {
         });
       }
       if (path === '/bonds/verify' && method === 'GET') {
-        return await handleVerify(res, url, ln, true);
+        return await handleVerify(res, url, ln, { authed: true, client: req.socket.remoteAddress ?? 'unknown' });
       }
 
       // --- wallet (non-custodial sats via NWC) ---
@@ -594,12 +631,27 @@ export function createDaemon(options: DaemonOptions = {}) {
 
 /**
  * GET /bonds/verify. The verdict itself is core's verifyBond (one mutual rule
- * for the daemon, SDK and CLI). `withPrivate` includes the gift-wrapped sides
- * this node can decrypt — only for the authenticated operator.
+ * for the daemon, SDK and CLI). Only the authenticated operator gets the
+ * gift-wrapped sides this node can decrypt, and only the operator may choose
+ * which relays the daemon dials: an anonymous caller (the paid market) is
+ * verified against the configured set, so `?relay=` can't point the daemon at
+ * arbitrary hosts. `?party=` (repeatable) names claimed parties to fetch
+ * directly, so a flood of other authors on the bond id can't crowd them out.
  */
-async function handleVerify(res: ServerResponse, url: URL, ln: LightningProvider | null, withPrivate: boolean): Promise<void> {
+async function handleVerify(
+  res: ServerResponse,
+  url: URL,
+  ln: LightningProvider | null,
+  caller: { authed: boolean; client: string },
+): Promise<void> {
   const bondId = url.searchParams.get('bond_id');
   if (!bondId) return json(res, 400, { error: 'bond_id query param required' });
+  const partyParams = url.searchParams.getAll('party');
+  if (partyParams.length > MAX_VERIFY_PARTIES) {
+    return json(res, 400, { error: `at most ${MAX_VERIFY_PARTIES} party params` });
+  }
+  const parties = [...new Set(partyParams.map((p) => identityHex(p, 'party')))];
+  const relays = caller.authed ? relaysFrom(url) : RELAYS;
 
   // Paid-verification market (L402-style). Active only when a price is set
   // AND a wallet is connected to collect to. First request → 402 + invoice;
@@ -608,7 +660,17 @@ async function handleVerify(res: ServerResponse, url: URL, ln: LightningProvider
   if (paywalled && ln) {
     const paymentHash = url.searchParams.get('payment_hash');
     if (!paymentHash) {
-      const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`);
+      // Each invoice is a bearer token for one verification, so it is never
+      // shared between requesters; issuing is bounded instead.
+      if (pendingVerificationCount() >= VERIFY_MAX_PENDING) {
+        res.setHeader('Retry-After', '60');
+        return json(res, 429, { error: 'too many unpaid verification invoices outstanding — retry later' });
+      }
+      if (!caller.authed && !takeInvoiceSlot(caller.client)) {
+        res.setHeader('Retry-After', '60');
+        return json(res, 429, { error: 'too many verification invoices requested — retry later' });
+      }
+      const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`, VERIFICATION_INVOICE_EXPIRY_SECS);
       if (!inv.paymentHash) {
         return json(res, 502, { error: 'wallet returned no payment hash; cannot gate verification' });
       }
@@ -650,8 +712,8 @@ async function handleVerify(res: ServerResponse, url: URL, ln: LightningProvider
   // Public events always count; gift-wrapped sides are included when this
   // node holds a key that can decrypt them AND the caller is the operator.
   // To anyone else a private bond is invisible — disclosure-mediated by design.
-  const secret = withPrivate && hasIdentity() ? loadSecret() : undefined;
-  const verdict = await verifyBond(bondId, relaysFrom(url), secret ? { secret } : {});
+  const secret = caller.authed && hasIdentity() ? loadSecret() : undefined;
+  const verdict = await verifyBond(bondId, relays, { ...(secret ? { secret } : {}), ...(parties.length ? { parties } : {}) });
   return json(res, 200, {
     bond_id: bondId,
     paid: paywalled ? true : undefined,

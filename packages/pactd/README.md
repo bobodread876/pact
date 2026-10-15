@@ -36,6 +36,8 @@ Requires **Node >= 22** (pactd uses the global `WebSocket`).
 | `PACT_NWC` | unset | Nostr Wallet Connect URI. **`wallet.json` (set via the UI / `POST /wallet/connect`, including a disconnect) takes precedence** |
 | `PACT_WALLET_AMOUNTLESS` | auto | override whether the wallet backend can pay amountless invoices |
 | `PACT_VERIFY_PRICE_SATS` | `0` | paid-verification price; 0 = free |
+| `PACT_VERIFY_MAX_PENDING` | `200` | most unpaid, unexpired verification invoices outstanding at once; past it → 429 |
+| `PACT_VERIFY_INVOICES_PER_MIN` | `10` | new verification invoices one client address may request per minute (unauthenticated callers); past it → 429 |
 | `PACT_INTENT_SEEKING` / `PACT_INTENT_ABOUT` | unset | opt-in install-time bond intent (see below) |
 
 Persisted files in `PACT_HOME`: `identity.json` (the key; `identity.<unix>.bak` after a forced replace), `token`, `relays.json`, `wallet.json`, `intent-closed.json`, `payments.json`, `verifications.json`.
@@ -112,7 +114,7 @@ This is the rail every [ECONOMICS.md](../../ECONOMICS.md) market settles on:
 
 `GET /bonds/verify` becomes a **paid endpoint** when `PACT_VERIFY_PRICE_SATS > 0` and a wallet is connected — the verifier earns sats for the work ([L402](https://docs.lightning.engineering/the-lightning-network/l402)-style HTTP 402 flow). Free (unchanged) otherwise.
 
-With a price set, `/bonds/verify` is served **without the admin token**, so strangers can buy a verification without holding the token that also pays invoices and replaces the identity. Unauthenticated buyers get the **public** verdict only; private sides (which need this node's key) are included only for the authenticated operator. Every other endpoint stays admin-only.
+With a price set, `/bonds/verify` is served **without the admin token**, so strangers can buy a verification without holding the token that also pays invoices and replaces the identity. Unauthenticated buyers get the **public** verdict only; private sides (which need this node's key) are included only for the authenticated operator. Unauthenticated buyers are also verified against the node's **configured relays**: `?relay=` is honored only for the operator (deduped, at most 10), so a stranger can't make the daemon dial arbitrary hosts. Anyone may pass `?party=<npub|did|hex>` (repeatable, at most 10) to name the claimed parties; their sides are fetched directly, so a flood of other authors' events on the bond id can't crowd them out. Every other endpoint stays admin-only.
 
 ```bash
 # 1) request → 402 with an invoice
@@ -125,7 +127,7 @@ curl -si "verifier.example:8787/bonds/verify?bond_id=X&payment_hash=<hash>"
 #    → 200 { paid:true, mutual, parties, bonds, … }
 ```
 
-Guarantees: each invoice is **bound to one `bond_id`**, **single-use**, and **persisted** (`verifications.json`, written atomically; if it can't be written the request fails rather than serving an unrecorded redemption, so a restart can't replay it). An invoice counts as paid only when the wallet reports it **settled** (a preimage alone proves nothing for an incoming invoice). The ledger is per-node, not a shared macaroon scheme.
+Guarantees: each invoice is **bound to one `bond_id`**, **single-use**, and **persisted** (`verifications.json`, written atomically; if it can't be written the request fails rather than serving an unrecorded redemption, so a restart can't replay it). An invoice counts as paid only when the wallet reports it **settled** (a preimage alone proves nothing for an incoming invoice). Invoices are issued with a one-hour expiry; unredeemed entries are pruned a day after that, redeemed ones are kept. Issuing is bounded (`PACT_VERIFY_MAX_PENDING`, `PACT_VERIFY_INVOICES_PER_MIN`), so anonymous requests can't flood the operator's wallet history or the ledger. The ledger is per-node, not a shared macaroon scheme.
 
 This first cut ships the **rail + primitives** (invoice / pay / lookup / balance) plus **paid verification**. The other markets above build on these.
 

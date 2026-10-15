@@ -74,7 +74,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await relay.close();
   rmSync(home, { recursive: true, force: true });
-  for (const k of ['PACT_TOKEN', 'PACT_VERIFY_PRICE_SATS', 'PACT_HOME', 'PACT_RELAYS', 'PACT_ALLOWED_HOSTS']) delete process.env[k];
+  for (const k of ['PACT_TOKEN', 'PACT_VERIFY_PRICE_SATS', 'PACT_HOME', 'PACT_RELAYS', 'PACT_ALLOWED_HOSTS', 'PACT_VERIFY_MAX_PENDING', 'PACT_VERIFY_INVOICES_PER_MIN']) delete process.env[k];
 });
 
 describe('token-protected daemon with a paid verification market', () => {
@@ -194,6 +194,67 @@ describe('token-protected daemon with a paid verification market', () => {
     ctrl.abort();
     // One poll = a handful of REQs (public + paged inbox), not hundreds.
     expect(relay.reqCount() - before).toBeLessThan(10);
+  });
+});
+
+describe('anonymous /bonds/verify: the caller never picks the relays', () => {
+  it('an unauthenticated ?relay= is never dialed; the operator\'s still is; party params are validated', async () => {
+    const attacker = await startMockRelay();
+    const subHome = mkdtempSync(join(tmpdir(), 'pact-http-relay-'));
+    // Price set, no wallet: the market route is open and free.
+    const d = await startDaemon(
+      { PACT_HOME: subHome, PACT_RELAYS: relay.url, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: '5', PACT_ALLOWED_HOSTS: undefined },
+      { lightning: null },
+    );
+    try {
+      const bondId = encodeURIComponent(newBondId());
+      const evil = Array.from({ length: 20 }, () => `relay=${encodeURIComponent(attacker.url)}`).join('&');
+      const before = relay.reqCount();
+      const anon = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&${evil}`);
+      expect(anon.status).toBe(200);
+      expect(((await anon.json()) as { relaysReached: string[] }).relaysReached).not.toContain(attacker.url);
+      expect(attacker.reqCount()).toBe(0);
+      expect(relay.reqCount()).toBeGreaterThan(before);
+
+      const op = await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&${evil}`, { auth: true });
+      expect(op.status).toBe(200);
+      // Deduped: twenty copies of one relay are one relay.
+      expect(((await op.json()) as { relaysReached: string[] }).relaysReached).toEqual([attacker.url]);
+
+      const npub = keypairFromSecret(secretFromNsec(generateNostrKeypair().nsec)).npub;
+      expect((await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&party=${npub}`)).status).toBe(200);
+      expect((await call(d.base, 'GET', `/bonds/verify?bond_id=${bondId}&party=zzz`)).status).toBe(400);
+    } finally {
+      await d.close();
+      await attacker.close();
+      rmSync(subHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('anonymous invoice issuing is bounded', () => {
+  it('per-client rate limit applies to strangers, the pending cap to everyone', async () => {
+    const subHome = mkdtempSync(join(tmpdir(), 'pact-http-cap-'));
+    const wallet = stubWallet();
+    const d = await startDaemon(
+      { PACT_HOME: subHome, PACT_RELAYS: relay.url, PACT_TOKEN: TOKEN, PACT_VERIFY_PRICE_SATS: '5', PACT_VERIFY_INVOICES_PER_MIN: '3', PACT_VERIFY_MAX_PENDING: '5', PACT_ALLOWED_HOSTS: undefined },
+      { lightning: wallet.provider },
+    );
+    try {
+      const q = () => `/bonds/verify?bond_id=${encodeURIComponent(newBondId())}`;
+      const anon = [];
+      for (let i = 0; i < 4; i++) anon.push((await call(d.base, 'GET', q())).status);
+      expect(anon).toEqual([402, 402, 402, 429]);
+      // The operator isn't rate limited, but the global pending cap (5) holds.
+      const op = [];
+      for (let i = 0; i < 3; i++) op.push((await call(d.base, 'GET', q(), { auth: true })).status);
+      expect(op).toEqual([402, 402, 429]);
+    } finally {
+      await d.close();
+      rmSync(subHome, { recursive: true, force: true });
+      delete process.env.PACT_VERIFY_INVOICES_PER_MIN;
+      delete process.env.PACT_VERIFY_MAX_PENDING;
+    }
   });
 });
 

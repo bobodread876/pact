@@ -11,6 +11,7 @@
 // designed.
 
 import {
+  INTENT_D,
   KIND_BOND_HISTORY,
   KIND_BOND_INTENT,
   SEEK_KIND_PREFIX,
@@ -120,8 +121,12 @@ export async function discover(
   options: DiscoverOptions = {},
   selfHex?: string,
 ): Promise<{ relaysReached: string[]; candidates: Candidate[] }> {
+  // `#d` pins every query to the one intent slot per author. Each distinct d
+  // is its own addressable event, so without it one key could publish any
+  // number of "intents" and crowd every shared limit below.
   const filter: Record<string, unknown> = {
     kinds: [KIND_BOND_INTENT],
+    '#d': [INTENT_D],
     '#t': [options.kind ? SEEK_KIND_PREFIX + options.kind : SEEK_TAG],
     limit: Math.min(200, options.limit ?? 50),
   };
@@ -133,7 +138,7 @@ export async function discover(
   // reached re-list a node that unlisted.
   const newest = new Map<string, NonNullable<ReturnType<typeof parseBondIntent>>>();
   const consider = (event: (typeof events)[number]) => {
-    if (!verifyEvent(event)) return;
+    if (!isIntentSlot(event) || !verifyEvent(event)) return;
     const parsed = parseBondIntent(event);
     if (!parsed) return;
     const prior = newest.get(parsed.author);
@@ -150,6 +155,7 @@ export async function discover(
     const veto = await resolveEvents(relays, {
       kinds: [KIND_BOND_INTENT],
       authors: candidatesSoFar,
+      '#d': [INTENT_D],
       '#t': [SEEK_TAG],
       limit: candidatesSoFar.length * 4,
     } as never);
@@ -261,6 +267,11 @@ async function longevityRecord(author: string, relays: string[], reached: Set<st
   return { bonds: mutualIds.length, reaffirmations: days.size, oldestBondDays };
 }
 
+/** The event sits in the protocol's single intent slot (d = INTENT_D); a relay may ignore `#d`. */
+function isIntentSlot(event: { tags: string[][] }): boolean {
+  return event.tags.find((t) => t[0] === 'd')?.[1] === INTENT_D;
+}
+
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -281,10 +292,11 @@ export async function myIntent(
   const { events } = await resolveEvents(relays, {
     kinds: [KIND_BOND_INTENT],
     authors: [selfHex],
+    '#d': [INTENT_D],
     limit: 5,
   } as never);
   const valid = events
-    .filter(verifyEvent)
+    .filter((e) => isIntentSlot(e) && verifyEvent(e))
     .sort((a, b) => b.created_at - a.created_at)
     .map(parseBondIntent)
     .filter(Boolean);

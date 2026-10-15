@@ -68,4 +68,30 @@ describe('verification invoice ledger (paywall)', () => {
     ];
     expect(results.filter(Boolean)).toHaveLength(1);
   });
+
+  it('prunes unredeemed entries past retention but keeps redeemed ones', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      ledger.recordVerificationInvoice('stale', 'urn:mate:1');
+      ledger.recordVerificationInvoice('spent', 'urn:mate:1');
+      expect(ledger.consumeVerification('spent', 'urn:mate:1')).toBe(true);
+      vi.setSystemTime(new Date('2026-01-04T00:00:00Z'));
+      ledger.recordVerificationInvoice('new', 'urn:mate:1'); // a write prunes
+      expect(ledger.verificationStatus('stale', 'urn:mate:1')).toBe('unknown');
+      expect(ledger.verificationStatus('spent', 'urn:mate:1')).toBe('spent');
+      expect(ledger.verificationStatus('new', 'urn:mate:1')).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts only unredeemed invoices that can still be paid as pending', () => {
+    const now = Date.now();
+    ledger.recordVerificationInvoice('fresh', 'urn:mate:1', now);
+    ledger.recordVerificationInvoice('expired', 'urn:mate:1', now - 2 * ledger.VERIFICATION_INVOICE_EXPIRY_SECS * 1000);
+    ledger.recordVerificationInvoice('used', 'urn:mate:1', now);
+    ledger.consumeVerification('used', 'urn:mate:1');
+    expect(ledger.pendingVerificationCount(now)).toBe(1);
+  });
 });

@@ -65,7 +65,8 @@ export interface WalletCapabilities {
 export interface LightningProvider {
   getInfo(): Promise<Record<string, unknown>>;
   getBalanceSats(): Promise<number>;
-  makeInvoice(amountSats: number, description?: string): Promise<Invoice>;
+  /** `expirySecs` is passed to the wallet (NIP-47 `expiry`); omitted = the wallet's default. */
+  makeInvoice(amountSats: number, description?: string, expirySecs?: number): Promise<Invoice>;
   payInvoice(invoice: string, amountSats?: number): Promise<Payment>;
   lookupInvoice(opts: { invoice?: string; paymentHash?: string }): Promise<{ paid: boolean } & Record<string, unknown>>;
   listTransactions(opts?: { limit?: number; unpaid?: boolean }): Promise<WalletTransaction[]>;
@@ -120,8 +121,12 @@ export class NwcProvider implements LightningProvider {
     return Math.floor((Number(r.balance) || 0) / 1000);
   }
 
-  async makeInvoice(amountSats: number, description?: string): Promise<Invoice> {
-    const r = await this.request('make_invoice', { amount: amountSats * 1000, description });
+  async makeInvoice(amountSats: number, description?: string, expirySecs?: number): Promise<Invoice> {
+    const r = await this.request('make_invoice', {
+      amount: amountSats * 1000,
+      description,
+      ...(expirySecs ? { expiry: expirySecs } : {}),
+    });
     return { invoice: String(r.invoice), paymentHash: r.payment_hash ? String(r.payment_hash) : undefined };
   }
 

@@ -199,6 +199,9 @@ export interface BondView {
   visibility: BondVisibility;
 }
 
+/** Max authors in verifyBond's direct follow-up fetch for pairs inferred from unknown authors. */
+const DIRECT_FETCH_CAP = 50;
+
 /** Default cap on events per bond query (a relay serves the newest first). */
 const BOND_QUERY_LIMIT = 200;
 
@@ -304,18 +307,28 @@ export async function verifyBond(
   const reached = new Set(publicResults.flatMap((r) => r.relaysReached));
 
   // Once a candidate pair is visible, fetch both of its parties' sides
-  // directly, so each party's latest side is what gets evaluated.
-  const pairAuthors = new Set<string>();
+  // directly, so each party's latest side is what gets evaluated. A known
+  // party's own counterparty is always fetched: that is the only pair the
+  // caller cares about, and junk authors must not be able to switch it off.
+  const direct = new Set<string>();
+  for (const side of sides) {
+    if (side.signature_valid && side.counterparty && known.has(side.author)) direct.add(side.counterparty);
+  }
+  // Pairs inferred from unknown authors are a best-effort extra, capped so a
+  // flood of junk keys can't turn this into an unbounded authors filter.
+  const inferred = new Set<string>();
   for (const side of sides) {
     if (side.signature_valid && side.counterparty && !known.has(side.author)) {
-      pairAuthors.add(side.author);
-      pairAuthors.add(side.counterparty);
+      inferred.add(side.author);
+      inferred.add(side.counterparty);
     }
   }
-  if (pairAuthors.size > 0 && pairAuthors.size <= 50) {
-    const direct = await listBonds({ '#d': [bondId], authors: [...pairAuthors] }, relays);
-    sides = [...sides, ...direct.bonds];
-    for (const r of direct.relaysReached) reached.add(r);
+  if (direct.size + inferred.size <= DIRECT_FETCH_CAP) for (const a of inferred) direct.add(a);
+  for (const k of known) direct.delete(k); // already fetched by the authors query above
+  if (direct.size > 0) {
+    const fetched = await listBonds({ '#d': [bondId], authors: [...direct] }, relays);
+    sides = [...sides, ...fetched.bonds];
+    for (const r of fetched.relaysReached) reached.add(r);
   }
 
   if (options.secret) {

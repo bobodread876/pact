@@ -11,6 +11,7 @@ import {
   buildBondStateEvent,
   closeIntent,
   discover,
+  finalizeEvent,
   formBond,
   generateNostrKeypair,
   keypairFromSecret,
@@ -56,6 +57,42 @@ describe('unlisting is honored even when the close reached one relay', () => {
     await publishIntent(node, { seeking: ['team'], relays: [r1.url] });
     await closeIntent(node, [r1.url]);
     expect((await discover([r1.url], { kind: 'team' })).candidates.map((c) => c.author)).not.toContain(hex);
+  });
+});
+
+describe('one author gets one intent slot', () => {
+  it('extra intents under other d tags cannot crowd a victim\'s close out of the veto query', async () => {
+    const a = await startMockRelay();
+    const b = await startMockRelay();
+    try {
+      const both = [a.url, b.url];
+      const victim = fresh();
+      const victimHex = keypairFromSecret(victim).pubkeyHex;
+      await publishIntent(victim, { seeking: ['companion'], relays: [a.url] });
+      const now = Math.floor(Date.now() / 1000);
+      await publishEvent([b.url], buildBondIntentEvent({ seeking: [], status: 'closed' }, victim, { createdAt: now + 5 }));
+
+      // Mallory: one real open intent, plus 20 newer "intents" each in its own
+      // addressable slot (d = x0..x19), all on relay 2.
+      const mallory = fresh();
+      const malloryHex = keypairFromSecret(mallory).pubkeyHex;
+      await publishIntent(mallory, { seeking: ['companion'], relays: [b.url] });
+      for (let i = 0; i < 20; i++) {
+        const real = buildBondIntentEvent({ seeking: ['companion'] }, mallory, { createdAt: now + 10 + i });
+        const tags = real.tags.map((t) => (t[0] === 'd' ? ['d', `x${i}`] : t));
+        await publishEvent([b.url], finalizeEvent({ pubkey: malloryHex, created_at: real.created_at, kind: real.kind, tags, content: real.content }, mallory));
+      }
+
+      const { candidates } = await discover(both, { kind: 'companion' });
+      const authors = candidates.map((c) => c.author);
+      expect(authors).not.toContain(victimHex);
+      expect(authors.filter((x) => x === malloryHex)).toHaveLength(1);
+      // The off-slot events are never read as Mallory's intent.
+      expect(candidates.find((c) => c.author === malloryHex)!.intentAt).toBeLessThan(now + 10);
+    } finally {
+      await a.close();
+      await b.close();
+    }
   });
 });
 

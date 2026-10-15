@@ -147,6 +147,40 @@ describe('verifyBond: the mutual pair predicate', () => {
   }, 60_000);
 });
 
+describe('verifyBond: a junk flood p-tagging the proposer', () => {
+  it('the proposer, an outsider naming her, and reaffirmBond(alice) still see the mutual bond', async () => {
+    const relay = await startMockRelay();
+    try {
+      const rs = [relay.url];
+      const bondId = newBondId();
+      await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', relays: rs });
+      await acceptBond(bob, { bondId, relays: rs });
+      await tick();
+      // 210 fresh keys publish newer sides for the same id naming Alice: they
+      // fill both the #d page and the #p page, and push the inferred-pair set
+      // past its cap.
+      for (let i = 0; i < 210; i++) {
+        const spammer = fresh();
+        const doc = makeBondDocument(keypairFromSecret(spammer).did, aliceNpub, { bondId, state: 'active' });
+        await publishEvent(rs, buildBondStateEvent(doc, spammer, { createdAt: Math.floor(Date.now() / 1000) }));
+      }
+
+      const asAlice = await verifyBond(bondId, rs, { secret: alice });
+      expect(asAlice.mutual).toBe(true);
+      expect(new Set(asAlice.parties)).toEqual(new Set([aliceHex, bobHex]));
+
+      const outsider = await verifyBond(bondId, rs, { parties: [aliceNpub] });
+      expect(outsider.mutual).toBe(true);
+      expect(new Set(outsider.parties)).toEqual(new Set([aliceHex, bobHex]));
+
+      const r = await reaffirmBond(alice, { bondId, relays: rs });
+      expect(r.visibility).toBe('public');
+    } finally {
+      await relay.close();
+    }
+  }, 60_000);
+});
+
 describe('private sides: the disclosed document must match what is counted', () => {
   it('a rumor whose tags say active but whose signed document says proposed is invalid', async () => {
     const bondId = newBondId();
