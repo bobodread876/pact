@@ -23,7 +23,17 @@ RUN npm run build -w pact-core -w pact-pactd
 # only, unprivileged user.
 FROM node:22-alpine
 WORKDIR /app
+# Refresh the CA store in both ca-certificates packages: the base snapshot can
+# predate Alpine's 20261020-r0, which distrusts the compromised eMudhra
+# intermediates (emSign ECC Root CA - G3). Upgrading only -bundle regenerates
+# the store from a stale source dir, so upgrade the main package too. Node gets
+# NODE_OPTIONS=--use-openssl-ca so TLS trusts the refreshed store instead of its
+# compiled-in roots. Assert the emSign root is gone.
+RUN apk upgrade --no-cache ca-certificates ca-certificates-bundle \
+ && if [ -f /etc/ssl/certs/ca-certificates.crt.apk-new ]; then mv /etc/ssl/certs/ca-certificates.crt.apk-new /etc/ssl/certs/ca-certificates.crt; fi \
+ && ! grep -q MIICTjCCAdOgAwIBAgIKPPYHqWhwDtqLhDAKBggqhkjOPQQDAzBr /etc/ssl/certs/ca-certificates.crt
 ENV NODE_ENV=production \
+    NODE_OPTIONS=--use-openssl-ca \
     PACT_HOST=0.0.0.0 \
     PACT_PORT=8787 \
     PACT_HOME=/data/.pact
