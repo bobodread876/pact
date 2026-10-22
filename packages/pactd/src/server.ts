@@ -53,7 +53,7 @@ import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.20.0';
+export const VERSION = '0.20.1';
 
 function truthy(v: string | undefined): boolean {
   return v !== undefined && !['', '0', 'false'].includes(v.toLowerCase());

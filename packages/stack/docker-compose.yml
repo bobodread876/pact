@@ -28,7 +28,7 @@ services:
   pactd:
     # Pinned to the pactd release this compose was written for (CI checks it
     # matches packages/pactd/package.json). Never :latest — it drifts.
-    image: ghcr.io/bobodread876/pactd:0.20.0
+    image: ghcr.io/bobodread876/pactd:0.20.1
     restart: unless-stopped
     depends_on:
       - relay
