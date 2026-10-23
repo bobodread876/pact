@@ -95,6 +95,10 @@ beforeAll(async () => {
   ]) {
     delete process.env[k];
   }
+  // Locked-down posture under test: auth default-ON (a persisted 0600 token).
+  // main's model makes auto-token opt-in for loopback daemons; this suite
+  // exercises the exposed-node posture explicitly. (Set AFTER the wipe above.)
+  process.env.PACT_AUTO_TOKEN = '1';
   vi.resetModules();
   const serverMod = await import('../packages/pactd/src/server.js');
   const relayMod = await import('../packages/pactd/src/relayconfig.js');

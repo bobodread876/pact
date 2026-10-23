@@ -1,15 +1,19 @@
 // Discovery: publish bond intents and browse the open board.
 //
 // The board is permissionless, so ranking is the reader's defense: candidates
-// are scored by their PUBLIC longevity record — distinct bonds, reaffirmations,
-// and age — which a fresh sybil cannot fake. Private bonds never contribute to
-// (or leak into) discovery; that is the §2.7 barbell working as designed.
+// are scored by their PUBLIC longevity record — distinct MUTUAL bonds,
+// reaffirmations of those bonds, and their age. Every input needs a second key
+// to have signed it too (one-sided bonds, reaffirmations of made-up bonds and
+// self-backdated timestamps count for nothing), so a lone fresh key scores
+// zero. Colluding key pairs can still build a record together: this raises the
+// cost of gaming the board, it does not make it impossible. Private bonds never
+// contribute to (or leak into) discovery; that is the §2.7 barbell working as
+// designed.
 
 import {
-  BOND_TAG,
+  INTENT_D,
   KIND_BOND_HISTORY,
   KIND_BOND_INTENT,
-  KIND_BOND_STATE,
   SEEK_KIND_PREFIX,
   SEEK_TAG,
   buildBondIntentEvent,
@@ -23,6 +27,9 @@ import {
 } from '@mate-protocol/core';
 
 import { DEFAULT_RELAYS } from '@mate-protocol/core';
+import type { BondView } from './index.js';
+import { listBonds } from './index.js';
+import { findMutualPair } from './mutual.js';
 import { REAFFIRM_TYPE } from './reaffirm.js';
 
 export interface PublishIntentInput extends BondIntent {
@@ -38,9 +45,17 @@ export interface PublishIntentResult {
 /** Publish (or update) this identity's bond intent — the act of becoming findable. */
 export async function publishIntent(secret: Uint8Array, input: PublishIntentInput): Promise<PublishIntentResult> {
   const relays = input.relays?.length ? input.relays : DEFAULT_RELAYS;
+  // Intents are addressable: a relay keeps the newest per author and breaks a
+  // same-second tie by lowest id, so an unlist issued in the same second as the
+  // open it replaces could silently lose. Always stamp strictly after the
+  // current intent.
+  const current = await myIntent(secret, relays).catch(() => null);
+  const now = Math.floor(Date.now() / 1000);
+  const createdAt = current ? Math.max(now, current.created_at + 1) : now;
   const event = buildBondIntentEvent(
     { seeking: input.seeking, about: input.about, profile: input.profile, status: input.status },
     secret,
+    { createdAt },
   );
   return {
     status: input.status ?? 'open',
@@ -55,11 +70,15 @@ export function closeIntent(secret: Uint8Array, relays?: string[]): Promise<Publ
 }
 
 export interface LongevityRecord {
-  /** Distinct public bonds this identity has authored. */
+  /** Distinct public bonds this identity is in that are mutual (both parties signed). */
   bonds: number;
-  /** Public reaffirmations it has published. */
+  /** Its public reaffirmations of those mutual bonds, at most one per bond per day. */
   reaffirmations: number;
-  /** Age in days of its oldest public bond event (0 when none). */
+  /**
+   * Age in days of its oldest mutual bond, measured from the LATER of the two
+   * sides' timestamps — backdating needs the counterparty to backdate too
+   * (0 when none).
+   */
   oldestBondDays: number;
 }
 
@@ -77,9 +96,10 @@ export interface Candidate {
 /**
  * score = bonds·2 + reaffirmations·3 + ln(1 + oldestBondDays)
  *
- * Reaffirmations weigh heaviest — repeated choice over time is the one signal
- * a sybil cannot mint in bulk. The formula is deliberately simple and public:
- * ranking must be auditable, or discovery becomes an algorithm to lobby.
+ * Reaffirmations weigh heaviest — repeated choice over time, counted only on
+ * mutual bonds and at most once a day, is the costliest signal to mint. The
+ * formula is deliberately simple and public: ranking must be auditable, or
+ * discovery becomes an algorithm to lobby.
  */
 export function scoreOf(record: LongevityRecord): number {
   return record.bonds * 2 + record.reaffirmations * 3 + Math.log(1 + record.oldestBondDays);
@@ -101,69 +121,65 @@ export async function discover(
   options: DiscoverOptions = {},
   selfHex?: string,
 ): Promise<{ relaysReached: string[]; candidates: Candidate[] }> {
+  // `#d` pins every query to the one intent slot per author. Each distinct d
+  // is its own addressable event, so without it one key could publish any
+  // number of "intents" and crowd every shared limit below.
   const filter: Record<string, unknown> = {
     kinds: [KIND_BOND_INTENT],
+    '#d': [INTENT_D],
     '#t': [options.kind ? SEEK_KIND_PREFIX + options.kind : SEEK_TAG],
     limit: Math.min(200, options.limit ?? 50),
   };
   const { events, relaysReached } = await resolveEvents(relays, filter as never);
+  const reached = new Set(relaysReached);
 
-  // newest valid open intent per author
-  const intents = new Map<string, ReturnType<typeof parseBondIntent>>();
-  for (const event of events) {
-    if (!verifyEvent(event)) continue;
+  // Newest valid intent per author FIRST, then drop the closed ones. Filtering
+  // before reducing would let a stale open intent on a relay the close never
+  // reached re-list a node that unlisted.
+  const newest = new Map<string, NonNullable<ReturnType<typeof parseBondIntent>>>();
+  const consider = (event: (typeof events)[number]) => {
+    if (!isIntentSlot(event) || !verifyEvent(event)) return;
     const parsed = parseBondIntent(event);
-    if (!parsed || parsed.status !== 'open') continue;
-    if (selfHex && parsed.author === selfHex) continue;
-    const prior = intents.get(parsed.author);
-    if (!prior || parsed.created_at > prior.created_at) intents.set(parsed.author, parsed);
+    if (!parsed) return;
+    const prior = newest.get(parsed.author);
+    if (!prior || parsed.created_at > prior.created_at) newest.set(parsed.author, parsed);
+  };
+  events.forEach(consider);
+
+  // A `seek:<kind>` query never returns closed intents (they carry no seek
+  // tags), and a per-kind or limited query may miss an author's newer intent.
+  // Re-read every candidate's intents by the generic tag so a newer close can
+  // veto the stale open one.
+  const candidatesSoFar = [...newest.keys()];
+  if (candidatesSoFar.length > 0) {
+    const veto = await resolveEvents(relays, {
+      kinds: [KIND_BOND_INTENT],
+      authors: candidatesSoFar,
+      '#d': [INTENT_D],
+      '#t': [SEEK_TAG],
+      limit: candidatesSoFar.length * 4,
+    } as never);
+    veto.events.forEach(consider);
+    veto.relaysReached.forEach((r) => reached.add(r));
+  }
+
+  const intents = new Map<string, NonNullable<ReturnType<typeof parseBondIntent>>>();
+  for (const [author, intent] of newest) {
+    if (intent.status !== 'open') continue;
+    if (selfHex && author === selfHex) continue;
+    if (options.kind && !intent.seeking.includes(options.kind)) continue;
+    intents.set(author, intent);
   }
 
   const authors = [...intents.keys()];
-  const records = new Map<string, LongevityRecord>(
-    authors.map((a) => [a, { bonds: 0, reaffirmations: 0, oldestBondDays: 0 }]),
-  );
-
-  if (authors.length > 0) {
-    // Two batched queries cover every candidate's public record.
-    const [states, reaffs] = await Promise.all([
-      resolveEvents(relays, { kinds: [KIND_BOND_STATE], '#t': [BOND_TAG], authors, limit: 500 }),
-      resolveEvents(relays, { kinds: [KIND_BOND_HISTORY], '#t': [REAFFIRM_TYPE], authors, limit: 500 }),
-    ]);
-    const now = Math.floor(Date.now() / 1000);
-    const bondsSeen = new Map<string, Set<string>>();
-    for (const event of states.events) {
-      if (!verifyEvent(event)) continue;
-      const rec = records.get(event.pubkey);
-      if (!rec) continue;
-      const d = event.tags.find((t) => t[0] === 'd')?.[1] ?? event.id;
-      const set = bondsSeen.get(event.pubkey) ?? new Set();
-      if (!set.has(d)) {
-        set.add(d);
-        bondsSeen.set(event.pubkey, set);
-        rec.bonds += 1;
-      }
-      rec.oldestBondDays = Math.max(rec.oldestBondDays, Math.floor((now - event.created_at) / 86400));
-    }
-    // One increment per (author, bond): repeated reaffirmations of the same
-    // bond are one ongoing choice, and letting them accrete would let spam
-    // mint the exact signal the fold exists to measure.
-    const reaffsSeen = new Map<string, Set<string>>();
-    for (const event of reaffs.events) {
-      if (!verifyEvent(event)) continue;
-      const rec = records.get(event.pubkey);
-      if (!rec) continue;
-      const d = event.tags.find((t) => t[0] === 'd')?.[1] ?? event.id;
-      const set = reaffsSeen.get(event.pubkey) ?? new Set();
-      if (set.has(d)) continue;
-      set.add(d);
-      reaffsSeen.set(event.pubkey, set);
-      rec.reaffirmations += 1;
-    }
-  }
+  const records = new Map<string, LongevityRecord>();
+  // Per-author queries (bounded concurrency): one prolific author can't use
+  // up a shared result limit and zero everyone else's record.
+  await mapLimit(authors, 6, async (author) => {
+    records.set(author, await longevityRecord(author, relays, reached));
+  });
 
   const candidates = [...intents.values()]
-    .filter((i): i is NonNullable<typeof i> => i !== null)
     .map((i) => {
       const record = records.get(i.author) ?? { bonds: 0, reaffirmations: 0, oldestBondDays: 0 };
       return {
@@ -178,7 +194,93 @@ export async function discover(
     })
     .sort((a, b) => b.score - a.score || b.intentAt - a.intentAt);
 
-  return { relaysReached, candidates };
+  return { relaysReached: [...reached], candidates };
+}
+
+/** Max public bonds examined per candidate. */
+const RECORD_BOND_LIMIT = 100;
+
+/**
+ * One author's public longevity record, counting only what a second key also
+ * signed: bonds that are mutual by findMutualPair, reaffirmations of those
+ * bonds (one per bond per UTC day), and age from the later of the two sides.
+ */
+async function longevityRecord(author: string, relays: string[], reached: Set<string>): Promise<LongevityRecord> {
+  const own = await listBonds({ authors: [author], limit: RECORD_BOND_LIMIT }, relays);
+  own.relaysReached.forEach((r) => reached.add(r));
+  const ownSides = own.bonds.filter((b) => b.signature_valid && b.bond && b.counterparty && b.counterparty !== author);
+  if (ownSides.length === 0) return { bonds: 0, reaffirmations: 0, oldestBondDays: 0 };
+
+  // The counterparties' sides for exactly these bond ids. Addressable events
+  // are one per (author, d), so the result is bounded by authors × ids.
+  const ids = [...new Set(ownSides.map((b) => b.bond as string))];
+  const counterparties = [...new Set(ownSides.map((b) => b.counterparty as string))];
+  const theirs = await listBonds(
+    { '#d': ids, authors: counterparties, '#p': [author], limit: Math.min(1000, ids.length * counterparties.length) },
+    relays,
+  );
+  theirs.relaysReached.forEach((r) => reached.add(r));
+
+  const byBond = new Map<string, BondView[]>();
+  for (const side of [...ownSides, ...theirs.bonds]) {
+    if (!side.bond) continue;
+    const list = byBond.get(side.bond) ?? [];
+    list.push(side);
+    byBond.set(side.bond, list);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const mutualIds: string[] = [];
+  const formed = new Map<string, number>();
+  let oldestBondDays = 0;
+  for (const [bondId, sides] of byBond) {
+    const pair = findMutualPair(sides);
+    if (!pair || !pair.parties.includes(author)) continue;
+    mutualIds.push(bondId);
+    const formedAt = Math.max(pair.sides[0].created_at, pair.sides[1].created_at);
+    formed.set(bondId, formedAt);
+    oldestBondDays = Math.max(oldestBondDays, Math.max(0, Math.floor((now - formedAt) / 86400)));
+  }
+  if (mutualIds.length === 0) return { bonds: 0, reaffirmations: 0, oldestBondDays: 0 };
+
+  const reaffs = await resolveEvents(relays, {
+    kinds: [KIND_BOND_HISTORY],
+    '#t': [REAFFIRM_TYPE],
+    '#d': mutualIds,
+    authors: [author],
+    limit: 500,
+  });
+  reaffs.relaysReached.forEach((r) => reached.add(r));
+  const days = new Set<string>();
+  const mutualSet = new Set(mutualIds);
+  for (const event of reaffs.events) {
+    if (!verifyEvent(event) || event.pubkey !== author) continue;
+    const d = event.tags.find((t) => t[0] === 'd')?.[1];
+    if (!d || !mutualSet.has(d)) continue;
+    // The timestamp is author-chosen: count it only between the moment both
+    // sides were signed and now, one per bond per day. Backdating or
+    // future-dating can't mint more days than really elapsed.
+    if (event.created_at < (formed.get(d) ?? Infinity) || event.created_at > now + 600) continue;
+    days.add(`${d}:${Math.floor(event.created_at / 86400)}`);
+  }
+
+  return { bonds: mutualIds.length, reaffirmations: days.size, oldestBondDays };
+}
+
+/** The event sits in the protocol's single intent slot (d = INTENT_D); a relay may ignore `#d`. */
+function isIntentSlot(event: { tags: string[][] }): boolean {
+  return event.tags.find((t) => t[0] === 'd')?.[1] === INTENT_D;
+}
+
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
 }
 
 /** This identity's own current intent, if any. */
@@ -190,10 +292,11 @@ export async function myIntent(
   const { events } = await resolveEvents(relays, {
     kinds: [KIND_BOND_INTENT],
     authors: [selfHex],
+    '#d': [INTENT_D],
     limit: 5,
   } as never);
   const valid = events
-    .filter(verifyEvent)
+    .filter((e) => isIntentSlot(e) && verifyEvent(e))
     .sort((a, b) => b.created_at - a.created_at)
     .map(parseBondIntent)
     .filter(Boolean);

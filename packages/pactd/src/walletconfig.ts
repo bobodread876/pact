@@ -12,10 +12,15 @@ function configPath(): string {
 }
 
 export function loadNwcUri(): string | undefined {
+  // wallet.json records the operator's EXPLICIT choice — connect or disconnect.
+  // When it exists (parseable), its answer is final: an env PACT_NWC must not
+  // resurrect a wallet the operator disconnected. The env is the fallback only
+  // when no choice has been recorded yet.
   try {
     if (existsSync(configPath())) {
-      const data = JSON.parse(readFileSync(configPath(), 'utf8')) as { nwc?: string };
-      if (data.nwc) return data.nwc;
+      const data = JSON.parse(readFileSync(configPath(), 'utf8')) as { nwc?: string; disconnected?: boolean };
+      if (data.disconnected === true) return undefined;
+      return data.nwc || undefined;
     }
   } catch {
     // ignore

@@ -12,6 +12,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -93,9 +94,30 @@ export function ensureIdentity(force = false): PublicIdentity {
     const id = loadIdentity();
     return { did: id.did, npub: id.npub, pubkeyHex: id.pubkeyHex, created: false };
   }
+  mkdirSync(pactHome(), { recursive: true });
+  try {
+    chmodSync(pactHome(), 0o700);
+  } catch {
+    /* best effort */
+  }
+  let backup: string | undefined;
+  if (hasIdentity()) {
+    // A planted symlink at the identity path is an attack artifact, not a
+    // file to quietly re-key around: refuse (fail closed) so the operator
+    // investigates, instead of silently rotating the node's identity while
+    // the attacker's target file stays in place.
+    const pre = lstatSync(identityPath(), { throwIfNoEntry: false });
+    if (pre && (pre.isSymbolicLink() || !pre.isFile())) {
+      throw new Error(`refusing to re-key over non-regular file: ${identityPath()}`);
+    }
+    backup = join(pactHome(), `identity.${Math.floor(Date.now() / 1000)}.bak`);
+    for (let n = 1; existsSync(backup); n++) backup = join(pactHome(), `identity.${Math.floor(Date.now() / 1000)}-${n}.bak`);
+    renameSync(identityPath(), backup);
+    chmodSync(backup, 0o600);
+  }
   const keypair = generateNostrKeypair();
   writeSecretFile(identityPath(), JSON.stringify(keypair, null, 2) + '\n');
-  return { did: keypair.did, npub: keypair.npub, pubkeyHex: keypair.pubkeyHex, created: true };
+  return { did: keypair.did, npub: keypair.npub, pubkeyHex: keypair.pubkeyHex, created: true, ...(backup ? { backup } : {}) };
 }
 
 export function loadSecret(): Uint8Array {

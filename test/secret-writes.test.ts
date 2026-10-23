@@ -18,7 +18,11 @@ beforeEach(() => {
   previousHome = process.env.PACT_HOME;
   home = mkdtempSync(join(tmpdir(), 'pact-secret-writes-'));
   process.env.PACT_HOME = home;
-  delete process.env.PACT_TOKEN; // force the load-or-create path
+  delete process.env.PACT_TOKEN;
+  // Force the load-or-create path: main's model makes the auto token opt-in
+  // (PACT_AUTO_TOKEN), the audit's made it default — this suite tests the
+  // hardened writer, which both models run.
+  process.env.PACT_AUTO_TOKEN = '1';
 });
 
 afterEach(() => {
