@@ -1,6 +1,6 @@
 {
   "name": "pact-cli",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Pact CLI — form, resolve, and verify agent bonds from the shell.",
   "license": "Apache-2.0",
   "repository": {

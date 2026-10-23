@@ -76,7 +76,7 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.12.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.12.1' });
 
   server.tool(
     'pact_keygen',

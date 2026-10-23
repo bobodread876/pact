@@ -24,7 +24,7 @@ services:
       - "7777:7777"
 
   web:
-    image: ghcr.io/bobodread876/pactd:latest
+    image: ghcr.io/bobodread876/pactd:0.20.2
     restart: on-failure
     depends_on:
       - relay
