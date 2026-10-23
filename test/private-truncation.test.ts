@@ -38,13 +38,15 @@ afterAll(async () => {
 
 describe('private inbox truncation signal', () => {
   it(
-    'a 201-wrap inbox is read COMPLETELY (paged) and reports no truncation',
+    'an inbox beyond one page is read COMPLETELY (paged) and reports no truncation',
     async () => {
-      // Each wrap carries its own bond id, so every first-stamp wait is
-      // independent — publish concurrently (serial would cost ~1s per wrap).
-      // Chunked so the in-process mock relay's socket never drops a burst
-      // write (a dropped write is the relay's failure mode, not the pager's).
-      const wraps = Array.from({ length: 201 }, () => ({
+      // The point: the pager descends past the FIRST page instead of treating
+      // a full page as the end of history. Cap the relay's page at 60 so 61
+      // wraps = two pages — the same coverage as 201 wraps at the real 200
+      // page size, at a fraction of the setup cost (each private formBond
+      // re-reads the whole inbox through the paged path).
+      relay.setMaxLimit(60);
+      const wraps = Array.from({ length: 61 }, () => ({
         counterparty: bobNpub,
         bondId: newBondId(),
         state: 'proposed' as const,
@@ -54,15 +56,12 @@ describe('private inbox truncation signal', () => {
       for (let i = 0; i < wraps.length; i += 30) {
         await Promise.all(wraps.slice(i, i + 30).map((w) => formBond(alice, w)));
       }
-      // The inbox pages per relay until history is exhausted: a 201-wrap
-      // window is fully read (two pages), so nothing is truncated and no
-      // withdrawal can hide beyond the first page.
       const { truncated, bonds, inboxRelaysUnread } = await listPrivateBonds(alice, relays);
       expect(truncated).toBe(false);
       expect(inboxRelaysUnread).toEqual([]);
-      expect(bonds.length).toBeGreaterThanOrEqual(200); // 201 published; a burst may lose one write to the mock relay
+      expect(bonds.length).toBeGreaterThanOrEqual(60);
     },
-    180_000,
+    120_000,
   );
 
   it('control: a one-wrap inbox is not truncated', async () => {
