@@ -219,7 +219,7 @@ export interface PrivateBondFilter {
  * Public bonds get the same flag from the event signature alone; the embedded
  * proof is what survives disclosure, so it is what we verify here.
  */
-export function toBondView(r: PrivateBondRumor): BondView {
+export function toBondView(r: PrivateBondRumor): BondView | null {
   let proofValid = false;
   try {
     const doc = JSON.parse(r.rumor.content) as MateDocument;
@@ -229,13 +229,37 @@ export function toBondView(r: PrivateBondRumor): BondView {
       // Every proof verifies AND is made by the authenticated author's key
       // (verifyProof checks the signature, not who the verificationMethod is).
       proofs.every((proof) => verifyProof(doc, proof) && pubkeyHexFromIdentity(proof.verificationMethod) === r.author) &&
-      pubkeyHexFromIdentity(doc.subject.id) === r.author &&
-      // The signed document must say what the rumor tags (which the BondView
-      // reports and the verdict counts) say — otherwise disclosure would prove
-      // something other than what was counted.
-      doc.bond.id === r.bond &&
-      pubkeyHexFromIdentity(doc.object.id) === r.counterparty &&
-      doc.bond.state === r.state;
+      pubkeyHexFromIdentity(doc.subject.id) === r.author;
+    if (proofValid) {
+      // Once the embedded document verifies it is authoritative — the view is
+      // filed under the DOCUMENT's bond/counterparty/state. The d tag is the
+      // rumor's FILE KEY: a d tag naming a different bond id than the sealed
+      // document is an attempt to inject the seal into another bond's context
+      // (the tampered-transport attack) — drop it entirely. A mere state or
+      // counterparty mismatch stays visible but flagged invalid (below): the
+      // honest transport carried a doc that outranks its own tags.
+      if (doc.bond.id !== r.bond) {
+        return null;
+      }
+      // d agrees; a state or counterparty mismatch still means the sealed doc
+      // outranks its own tags — file under the tags (what the verdict counts)
+      // but flag invalid: the disclosure proves something other than what was
+      // counted.
+      const counterparty = pubkeyHexFromIdentity(doc.object.id);
+      const state = String(doc.bond.state);
+      const agrees = counterparty === r.counterparty && state === r.state;
+      return {
+        id: r.rumor.id,
+        author: r.author,
+        bond: r.bond,
+        counterparty: r.counterparty,
+        state: r.state,
+        kind: kindFromContent(r.rumor.content),
+        created_at: r.rumor.created_at,
+        signature_valid: agrees,
+        visibility: 'private',
+      };
+    }
   } catch {
     proofValid = false;
   }
@@ -247,7 +271,7 @@ export function toBondView(r: PrivateBondRumor): BondView {
     state: r.state,
     kind: kindFromContent(r.rumor.content),
     created_at: r.rumor.created_at,
-    signature_valid: proofValid,
+    signature_valid: false,
     visibility: 'private',
   };
 }
@@ -290,7 +314,8 @@ export function bondViewsFromRumors(rumors: PrivateBondRumor[], filter: PrivateB
     if (filter.bondId && rumor.bond !== filter.bondId) continue;
     if (authorHex && rumor.author !== authorHex) continue;
     if (counterpartyHex && rumor.counterparty !== counterpartyHex) continue;
-    views.push(toBondView(rumor));
+    const view = toBondView(rumor);
+    if (view) views.push(view);
   }
 
   // kind:1059 is a regular kind, so perform the replaceable reduction the relay

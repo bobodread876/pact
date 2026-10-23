@@ -6,12 +6,12 @@
 // Unset (the default) leaves the API open — correct for loopback-only setups.
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { pactHome } from 'pact-core';
 
-function tokenPath(): string {
+export function tokenPath(): string {
   return join(pactHome(), 'token');
 }
 
@@ -25,7 +25,16 @@ export function resolveToken(): string | undefined {
   try {
     if (existsSync(tokenPath())) {
       const existing = readFileSync(tokenPath(), 'utf8').trim();
-      if (existing) return existing;
+      if (existing) {
+        // Tighten a planted-loose file: O_CREAT's mode only applies at
+        // creation, so an attacker's 0644 token would stay world-readable.
+        try {
+          chmodSync(tokenPath(), 0o600);
+        } catch {
+          // best effort — the read-back below still works
+        }
+        return existing;
+      }
     }
   } catch {
     // fall through and regenerate

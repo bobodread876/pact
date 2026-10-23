@@ -1,12 +1,34 @@
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+
+import { paymentPolicyViolation } from './policy.js';
 
 // pact-mcp is a thin MCP adapter over a running `pactd` daemon. The daemon holds
 // the agent's key, relay config, and wallet; this server just exposes its
 // operations as MCP tools. So an MCP agent (Claude Code, etc.) acts as that one
 // sovereign pactd identity. Point it at the daemon with PACT_DAEMON_URL.
 const DAEMON_URL = (process.env.PACT_DAEMON_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
-const TOKEN = process.env.PACT_TOKEN; // matches the daemon's PACT_TOKEN, if set
+// Auth: an explicit PACT_TOKEN wins. Otherwise, when the target is the LOCAL
+// daemon (loopback), read the daemon's persisted token from <PACT_HOME>/token
+// (mode 600, same user) — pactd auth is default-on, and same-machine agents
+// must keep working without hand-copying the token.
+const TOKEN = process.env.PACT_TOKEN ?? loadLocalDaemonToken();
+
+function loadLocalDaemonToken(): string | undefined {
+  try {
+    const hostname = new URL(DAEMON_URL).hostname;
+    if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(hostname)) return undefined;
+    const home = process.env.PACT_HOME ?? join(homedir(), '.pact');
+    const token = readFileSync(join(home, 'token'), 'utf8').trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // Must equal pact-core's BOND_STATES (the list pactd validates against); a
 // test asserts it. Kept as a literal so this thin client needs no pact-core
@@ -54,7 +76,7 @@ async function daemon(method: string, path: string, body?: unknown): Promise<unk
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'pact-mcp', version: '0.12.0' });
+  const server = new McpServer({ name: 'pact-mcp', version: '0.12.1' });
 
   server.tool(
     'pact_keygen',
@@ -228,12 +250,17 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_pay_invoice',
-    "Pay a bolt11 Lightning invoice from the daemon's wallet. SPENDS sats (subject to your wallet's NWC budget). For an amountless invoice, pass amountSats to set the amount. Returns status: 'settled' (confirmed paid), 'pending' (submitted but unconfirmed — DO NOT retry, may double-spend; check pact_list_transactions), or 'failed' (rejected, no funds moved).",
+    "Pay a bolt11 Lightning invoice from the daemon's wallet. SPENDS sats (subject to your wallet's NWC budget). Gated by the operator's payment policy: refuses unless PACT_MCP_ALLOW_PAYMENTS=1, and refuses above PACT_MCP_MAX_PAYMENT_SATS (default 1000 sats) even then. For an amountless invoice, pass amountSats to set the amount. Returns status: 'settled' (confirmed paid), 'pending' (submitted but unconfirmed — DO NOT retry, may double-spend; check pact_list_transactions), or 'failed' (rejected, no funds moved).",
     {
       invoice: z.string().describe('The bolt11 invoice to pay.'),
       amountSats: z.number().int().positive().optional().describe('Amount in sats — required only for amountless invoices.'),
     },
-    async ({ invoice, amountSats }) => text(await daemon('POST', '/wallet/pay', { invoice, amountSats })),
+    async ({ invoice, amountSats }) => {
+      // Payment policy gate (audit F-05): consulted per call, never at module load.
+      const refusal = paymentPolicyViolation({ invoice, amountSats });
+      if (refusal) return text(refusal);
+      return text(await daemon('POST', '/wallet/pay', { invoice, amountSats }));
+    },
   );
 
   server.tool(

@@ -51,6 +51,8 @@ export interface MockRelay {
   reqCount(): number;
   /** When true, every EVENT is answered OK=false and not stored (a relay that rejects writes). */
   setRejectEvents(reject: boolean): void;
+  /** Store invalid-signature events instead of rejecting (misconfigured relay). */
+  setStoreInvalid(store: boolean): void;
   /**
    * Serve the next `served` REQs normally, then misbehave on every later one:
    * 'closed' answers ["CLOSED", sub, "rate-limited: …"] with no events and no
@@ -70,6 +72,7 @@ export function startMockRelay(): Promise<MockRelay> {
   const events: StoredEvent[] = [];
   let reqs = 0;
   let rejectEvents = false;
+  let storeInvalid = false;
   let failAfter: { remaining: number; mode: 'closed' | 'drop'; kind?: number } | null = null;
   let maxLimit: number | null = null;
   const wss = new WebSocketServer({ port: 0 });
@@ -88,8 +91,14 @@ export function startMockRelay(): Promise<MockRelay> {
           ws.send(JSON.stringify(['OK', event.id, false, 'blocked: test relay rejects writes']));
           return;
         }
-        if (!verifyEvent(event)) {
+        if (!verifyEvent(event) && !storeInvalid) {
           ws.send(JSON.stringify(['OK', event.id, false, 'invalid: bad id or signature']));
+          return;
+        }
+        if (!verifyEvent(event)) {
+          // A no-verification relay stores as-is; clients see the bad sig.
+          events.push(event);
+          ws.send(JSON.stringify(['OK', event.id, true, 'stored (no signature check)']));
           return;
         }
         // Addressable kinds (30000–39999): keep only the newest (author, d) event
@@ -150,6 +159,9 @@ export function startMockRelay(): Promise<MockRelay> {
         reqCount: () => reqs,
         setRejectEvents: (reject: boolean) => {
           rejectEvents = reject;
+        },
+        setStoreInvalid: (store: boolean) => {
+          storeInvalid = store;
         },
         failReqsAfter: ((served: number | null, mode?: 'closed' | 'drop', kind?: number) => {
           failAfter = served === null ? null : { remaining: served, mode: mode ?? 'closed', kind };

@@ -15,6 +15,7 @@ export {
 } from './bond.js';
 export { PactError, type PactErrorCode } from './errors.js';
 export * from './keystore.js';
+export { verifyBondDisclosure } from './disclosure.js';
 export {
   ACCEPTED_STATES,
   CONSENTING_STATES,
@@ -251,13 +252,14 @@ const BOND_QUERY_LIMIT = 200;
 export async function listBonds(
   filter: Pick<RelayFilter, 'authors' | '#d' | '#p'> & { limit?: number },
   relays: string[] = DEFAULT_RELAYS,
-): Promise<{ relaysReached: string[]; bonds: BondView[] }> {
+): Promise<{ relaysReached: string[]; bonds: BondView[]; truncated: boolean }> {
   // #t scopes the query to MATE bonds — kinds 30317/1317 are unallocated, so
   // filtering by the discriminator tag avoids resolving unrelated apps' events.
+  const limit = filter.limit ?? BOND_QUERY_LIMIT;
   const { events, relaysReached } = await resolveEvents(relays, {
     kinds: [30317],
     '#t': [BOND_TAG],
-    limit: BOND_QUERY_LIMIT,
+    limit,
     ...filter,
   });
   const views = events.map((event: NostrEvent) => ({
@@ -276,7 +278,11 @@ export async function listBonds(
   const valid = latestPerKey(views.filter((v) => v.signature_valid), (v) => `${v.author}:${v.bond ?? v.id}`);
   const invalid = views.filter((v) => !v.signature_valid);
   const bonds = [...valid, ...invalid].sort((a, b) => b.created_at - a.created_at);
-  return { relaysReached, bonds };
+  // A merged result at the limit means crowding spam may have pushed honest
+  // events out of the window — callers treat downstream verdicts as
+  // inconclusive.
+  const truncated = events.length >= limit;
+  return { relaysReached, bonds, truncated };
 }
 
 export interface VerifyBondResult {
@@ -302,6 +308,8 @@ export interface VerifyBondResult {
    * verdict on someone else's bond is unaffected (the flag is still reported).
    */
   inboxTruncated?: boolean;
+  /** A public query hit its result window — newer sides may be missing (crowding). */
+  truncated?: boolean;
   /**
    * Relays that were asked for this node's private inbox but never served it
    * (down, or refusing it — e.g. NIP-42 `auth-required`). They may still appear
@@ -359,6 +367,9 @@ export async function verifyBond(
   const publicResults = await Promise.all(queries);
   let sides = publicResults.flatMap((r) => r.bonds);
   const reached = new Set(publicResults.flatMap((r) => r.relaysReached));
+  // Any public query hitting its result window means newer sides may be
+  // missing from the merge (crowding) — surfaced to the caller below.
+  let listTruncated = publicResults.some((r) => r.truncated);
 
   // Once a candidate pair is visible, fetch both of its parties' sides
   // directly, so each party's latest side is what gets evaluated. A known
@@ -383,6 +394,7 @@ export async function verifyBond(
     const fetched = await listBonds({ '#d': [bondId], authors: [...direct] }, relays);
     sides = [...sides, ...fetched.bonds];
     for (const r of fetched.relaysReached) reached.add(r);
+    listTruncated = listTruncated || fetched.truncated;
   }
 
   let inboxTruncated = false;
@@ -417,6 +429,10 @@ export async function verifyBond(
     // bond mutual on a partial read; anyone else's bond is unaffected.
     mutual: pair !== null && !(inboxTruncated && selfHex !== null && pair.parties.includes(selfHex)),
     ...(inboxTruncated ? { inboxTruncated: true } : {}),
+    // A crowded public relay window may have pushed newer sides (a revoke, a
+    // counter-proposal) out of the query result — callers needing a
+    // tamper-proof verdict treat this as "inconclusive, refetch narrower".
+    ...(listTruncated ? { truncated: true } : {}),
     ...(inboxRelaysUnread.length ? { inboxRelaysUnread } : {}),
     ...(pair ? { parties: pair.parties } : {}),
     ...(anyPrivate ? { private: true } : {}),

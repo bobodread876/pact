@@ -166,7 +166,14 @@ describe('token-protected daemon with a paid verification market', () => {
     const { payment_hash: hash } = (await (await call(d.base, 'GET', q)).json()) as { payment_hash: string };
     wallet.pay(hash);
     const results = await Promise.all(Array.from({ length: 4 }, () => call(d.base, 'GET', `${q}&payment_hash=${hash}`)));
-    expect(results.map((r) => r.status).sort()).toEqual([200, 402, 402, 402]);
+    // Exactly one redeems (200). The losers either see the single-use consume
+    // (402, already redeemed) or the in-flight guard (409, being redeemed
+    // right now — retryable) — the fulfill-before-consume flow means a
+    // concurrent request can genuinely be mid-fulfillment when it loses.
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses[0]).toBe(200);
+    // the three losers: single-use consume (402) or in-flight guard (409)
+    expect(statuses.slice(1).every((st) => st === 402 || st === 409)).toBe(true);
   });
 
   it('strangers get the public verdict only; the operator also sees private sides', async () => {

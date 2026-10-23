@@ -31,9 +31,11 @@ import { timingSafeEqual } from 'node:crypto';
 import {
   VERIFICATION_INVOICE_EXPIRY_SECS,
   consumeVerification,
+  countPendingVerifications,
   ownsPaymentHash,
   pendingVerificationCount,
   pendingVerificationCountFor,
+  pendingVerificationForBond,
   recordPaymentHash,
   recordVerificationInvoice,
   verificationStatus,
@@ -48,12 +50,12 @@ import {
   markUnlisted,
   publishedStatus,
 } from './intentconfig.js';
-import { relaysAreCustom, resolveRelays, saveRelays } from './relayconfig.js';
+import { relaysAreCustom, resolveRelays, sanitizeRelayUrl, saveRelays } from './relayconfig.js';
 import { resolveToken } from './tokenconfig.js';
 import { renderUI } from './ui.js';
 import { clearNwcUri, loadNwcUri, saveNwcUri } from './walletconfig.js';
 
-export const VERSION = '0.20.1';
+export const VERSION = '0.20.2';
 
 function truthy(v: string | undefined): boolean {
   return v !== undefined && !['', '0', 'false'].includes(v.toLowerCase());
@@ -96,8 +98,12 @@ function hostAllowed(req: IncomingMessage): boolean {
   if (!host) return false;
   const name = hostnameOf(host);
   if (LOOPBACK_HOSTS.has(name)) return true;
+  // DNS-rebinding defense: a rebound Host (evil.example resolving to
+  // 127.0.0.1) is refused even with a valid token — the open routes (/, /healthz)
+  // answer to anyone who can reach the port, and a rebound page reaches exactly
+  // those. Loopback names and the operator's PACT_ALLOWED_HOSTS pass.
   if (ALLOWED_HOSTS.includes('*') || ALLOWED_HOSTS.includes(name) || ALLOWED_HOSTS.includes(host.toLowerCase())) return true;
-  return Boolean(TOKEN) && ALLOWED_HOSTS.length === 0;
+  return !LOOPBACK_BIND && ALLOWED_HOSTS.length === 0 && Boolean(TOKEN);
 }
 
 /**
@@ -124,15 +130,6 @@ function sameOrigin(req: IncomingMessage): boolean {
   }
 }
 
-/** A client error with its HTTP status (mapped in the request handler). */
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 function identityHex(value: string, field: string): string {
   try {
@@ -159,6 +156,22 @@ function positiveIntEnv(name: string, fallback: number): number {
   const n = Math.floor(Number(process.env[name]));
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+// The configured bind host (index.ts listens with the same default). Loopback
+// binds enforce an anti-DNS-rebinding Host allowlist; non-loopback binds rely
+// on the Origin check + token.
+export const HOST = process.env.PACT_HOST ?? '127.0.0.1';
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}
+const LOOPBACK_BIND = isLoopbackHost(HOST);
+
+// In-flight redemption guard: a payment hash being redeemed right now. The
+// paid path below awaits across the wallet lookup and relay reads, so two
+// concurrent requests for the same hash could otherwise both fulfill before
+// either consumes. The loser gets a 409, not a double-fulfill.
+const inflightRedemptions = new Set<string>();
 
 // Anonymous callers can make the daemon create invoices in the operator's
 // wallet, so issuing is bounded: at most this many unredeemed, unexpired
@@ -257,7 +270,29 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body, null, 2));
 }
 
+/** Rejection carrying its HTTP status (e.g. 415 for non-JSON bodies). */
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  // Any request carrying a body must declare application/json (parameters
+  // allowed). Browser forms can only send text/plain/urlencoded/multipart
+  // without a preflight, so this gate removes the no-preflight CSRF vector.
+  const declaredLength = Number(req.headers['content-length'] ?? 0);
+  const hasBody = declaredLength > 0 || Boolean(req.headers['transfer-encoding']);
+  if (hasBody) {
+    const mediaType = (req.headers['content-type'] ?? '').split(';', 1)[0].trim().toLowerCase();
+    if (mediaType !== 'application/json') {
+      req.resume(); // drain so the connection stays healthy
+      return Promise.reject(new HttpError(415, 'unsupported media type — bodies must be application/json'));
+    }
+  }
   return new Promise((resolve, reject) => {
     let data = '';
     let tooLarge = false;
@@ -303,7 +338,14 @@ function authorized(req: IncomingMessage): boolean {
 const MAX_REQUEST_RELAYS = 10;
 
 function relaysFrom(url: URL): string[] {
-  const relays = [...new Set(url.searchParams.getAll('relay'))].slice(0, MAX_REQUEST_RELAYS);
+  // ?relay= overrides are caller-controlled: sanitize every entry (bare
+  // ws:// or wss:// only — no userinfo, no control chars) so a hostile
+  // override can never become a dial target (SSRF pivot). If nothing valid
+  // remains, the configured relay set answers.
+  const relays = [...new Set(url.searchParams.getAll('relay'))]
+    .slice(0, MAX_REQUEST_RELAYS)
+    .map((r) => sanitizeRelayUrl(r))
+    .filter((r): r is string => r !== undefined);
   return relays.length ? relays : RELAYS;
 }
 
@@ -353,9 +395,16 @@ export function createDaemon(options: DaemonOptions = {}) {
       }
 
       if (!sameOrigin(req)) return json(res, 403, { error: 'cross-origin request refused' });
-      // A non-GET must declare a JSON body. Browsers can only send that
-      // cross-origin after a CORS preflight, which pactd never approves.
-      if (method !== 'GET' && method !== 'HEAD') {
+      // No CORS preflight surface: OPTIONS is not a route (nothing to answer
+      // a preflight with, so browsers refuse to send the real request).
+      if (method === 'OPTIONS') return json(res, 404, { error: 'not found', path });
+      // A non-GET carrying a body must declare application/json. Browsers can
+      // only send such a request cross-origin after a CORS preflight, which
+      // pactd never approves. (Bodyless POSTs carry nothing a forged form can
+      // smuggle — /identity takes no fields — so they pass.)
+      const declaredLength = Number(req.headers['content-length'] ?? 0);
+      const bodyBearing = declaredLength > 0 || Boolean(req.headers['transfer-encoding']);
+      if (method !== 'GET' && method !== 'HEAD' && bodyBearing) {
         const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
         if (type !== 'application/json') {
           return json(res, 415, { error: 'Content-Type must be application/json' });
@@ -663,8 +712,12 @@ export function createDaemon(options: DaemonOptions = {}) {
           .map((r) => r.trim())
           .filter(Boolean);
         if (relays.length === 0) return json(res, 400, { error: 'at least one relay URL required' });
-        const bad = relays.find((r) => !/^wss?:\/\//.test(r));
-        if (bad) return json(res, 400, { error: `invalid relay URL (must start with ws:// or wss://): ${bad}` });
+        const bad = relays.filter((r) => sanitizeRelayUrl(r) === undefined);
+        if (bad.length > 0) {
+          return json(res, 400, {
+            error: `invalid relay URLs (must be bare ws:// or wss://, no credentials): ${bad.join(', ')}`,
+          });
+        }
         saveRelays(relays);
         RELAYS = relays;
         return json(res, 200, { relays: RELAYS, custom: true });
@@ -701,6 +754,8 @@ async function handleVerify(
   ln: LightningProvider | null,
   caller: { authed: boolean; client: string },
 ): Promise<void> {
+  // eslint-disable-next-line no-console
+  console.error('[hv] authed=%s client=%s TOKEN=%s', caller.authed, caller.client, typeof TOKEN === 'string' ? 'set' : String(TOKEN));
   const bondId = url.searchParams.get('bond_id');
   if (!bondId) return json(res, 400, { error: 'bond_id query param required' });
   const partyParams = url.searchParams.getAll('party');
@@ -720,6 +775,8 @@ async function handleVerify(
       // Each invoice is a bearer token for one verification, so it is never
       // shared between requesters; issuing is bounded instead.
       if (!caller.authed) {
+        // eslint-disable-next-line no-console
+        console.error('[cap-debug] client=%s perClient=%d global=%d maxP=%d', caller.client, pendingVerificationCountFor(caller.client), pendingVerificationCount(), VERIFY_MAX_PENDING);
         if (pendingVerificationCountFor(caller.client) >= VERIFY_MAX_PENDING_PER_CLIENT) {
           res.setHeader('Retry-After', '60');
           return json(res, 429, { error: 'too many unpaid verification invoices outstanding for this client — pay or wait for them to expire' });
@@ -733,6 +790,18 @@ async function handleVerify(
           return json(res, 429, { error: 'too many verification invoices requested — retry later' });
         }
       }
+      // Reuse the live invoice already issued for this bond: re-asking must
+      // not mint a second one (unbounded issuance DoS + NWC round-trip cost).
+      const live = pendingVerificationForBond(bondId);
+      if (live?.invoice) {
+        return json(res, 402, {
+          error: 'payment required',
+          price_sats: VERIFY_PRICE_SATS,
+          invoice: live.invoice,
+          payment_hash: live.hash,
+          hint: 'pay the invoice, then retry with &payment_hash=<hash>',
+        });
+      }
       const inv = await ln.makeInvoice(VERIFY_PRICE_SATS, `pact: verify ${bondId}`, VERIFICATION_INVOICE_EXPIRY_SECS);
       if (!inv.paymentHash) {
         return json(res, 502, { error: 'wallet returned no payment hash; cannot gate verification' });
@@ -740,7 +809,7 @@ async function handleVerify(
       recordPaymentHash(inv.paymentHash);
       // Bind this invoice to this bond, single-use — see ledger.ts. Throws if
       // it can't be persisted: never hand out an invoice we can't honor.
-      recordVerificationInvoice(inv.paymentHash, bondId, Date.now(), caller.authed ? undefined : caller.client);
+      recordVerificationInvoice(inv.paymentHash, bondId, Date.now(), caller.authed ? undefined : caller.client, inv.invoice);
       return json(res, 402, {
         error: 'payment required',
         price_sats: VERIFY_PRICE_SATS,
@@ -768,17 +837,49 @@ async function handleVerify(
     if (status === 'spent') {
       return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
     }
-    const look = await ln.lookupInvoice({ paymentHash });
-    if (!look.paid) {
-      return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+    // Concurrent-redemption guard: the paid path awaits across the wallet
+    // lookup and relay reads; two requests for the same hash must not both
+    // fulfill. The loser gets a 409 and can retry.
+    if (inflightRedemptions.has(paymentHash)) {
+      return json(res, 409, { error: 'this payment hash is being redeemed right now — retry in a moment', payment_hash: paymentHash });
     }
-    // Authoritative single-use consume (synchronous after the await; wins
-    // the race). Throws (→ 500, nothing served) if it can't be persisted.
+    inflightRedemptions.add(paymentHash);
+    let verdict;
+    try {
+      const look = await ln.lookupInvoice({ paymentHash });
+      if (!look.paid) {
+        return json(res, 402, { error: 'invoice not settled yet', payment_hash: paymentHash, price_sats: VERIFY_PRICE_SATS });
+      }
+      // FULFILL before consuming: read the relays and build the verdict
+      // first. A verification that fails (no relay answered, daemon error)
+      // must NOT burn the operator's payment — nothing was consumed, the
+      // redemption stays reusable, and the caller sees the error.
+      const secret = caller.authed && hasIdentity() ? loadSecret() : undefined;
+      verdict = await verifyBond(bondId, relays, { ...(secret ? { secret } : {}), ...(parties.length ? { parties } : {}) });
+      // No relay answered at all: fulfillment never happened. 502 (retryable,
+      // invoice untouched) instead of serving a verdict built from nothing.
+      if (verdict.relaysReached.length === 0) {
+        throw new HttpError(502, 'no relay answered — verification could not be fulfilled; the invoice is not consumed, retry');
+      }
+    } finally {
+      inflightRedemptions.delete(paymentHash);
+    }
+    // Authoritative single-use consume (synchronous now that the verdict is
+    // in hand; wins the race). Throws (→ 500, nothing served) if it can't be
+    // persisted — the redemption is NOT consumed, so a retry after the disk
+    // recovers still works.
     if (!consumeVerification(paymentHash, bondId)) {
       return json(res, 402, { error: 'payment already redeemed — verification invoices are single-use', price_sats: VERIFY_PRICE_SATS });
     }
+    return json(res, 200, {
+      bond_id: bondId,
+      paid: true,
+      price_sats: VERIFY_PRICE_SATS,
+      ...verdict,
+    });
   }
 
+  // Unpaid path (no wallet, or free verification).
   // Public events always count; gift-wrapped sides are included when this
   // node holds a key that can decrypt them AND the caller is the operator.
   // To anyone else a private bond is invisible — disclosure-mediated by design.

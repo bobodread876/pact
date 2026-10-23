@@ -105,17 +105,16 @@ describe('keystore force', () => {
 });
 
 describe('status UI', () => {
-  it('esc() is safe inside double-quoted attributes', async () => {
+  it('relay data never reaches markup: the page ships no esc() interpolation', async () => {
+    // The safe-DOM renderer (h() + textContent) has no escape helper to unit-test;
+    // the invariant it guarantees is that the SHIPPED page contains no
+    // interpolation point for relay-controlled strings into attributes.
     const { renderUI } = await import('../packages/pactd/src/ui.js');
     const html = renderUI('secret-token', undefined, undefined, false);
     expect(html).not.toContain('secret-token');
-    const src = html.match(/const esc = (\(s\) => .*);\n/)?.[1];
-    expect(src).toBeDefined();
-    const esc = new Function(`return ${src}`)() as (s: string) => string;
-    const payload = 'x" autofocus onfocus="alert(1)';
-    const attr = `<button data-bond="${esc(payload)}">`;
-    expect(attr).not.toContain('" autofocus');
-    expect(esc(`'<>&`)).toBe('&#39;&lt;&gt;&amp;');
+    // data-* attributes are set via dataset (textContent semantics), never via
+    // string-built markup: no bondRow-style attribute concatenation survives.
+    expect(html).not.toMatch(/data-bond=\\"\$\{/);
   });
 
   it('embeds the token only when told it sits behind an authenticating proxy', async () => {

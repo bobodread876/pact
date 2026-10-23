@@ -111,3 +111,50 @@ describe('discovery', () => {
     }
   });
 });
+
+describe('reaffirmation folding (F-14/F-16)', () => {
+  it('two authors each spamming 50 reaffirms on one bond count once each, not 50', async () => {
+    const spammers = [secretFromNsec(generateNostrKeypair().nsec), secretFromNsec(generateNostrKeypair().nsec)];
+    for (const spammer of spammers) {
+      // A reaffirmation requires a live mutual bond (reaffirmBond refuses
+      // otherwise) — each spammer forms AND forms their own bond with the
+      // partner (one shared bond id would make partner's accept ambiguous).
+      const bondId = newBondId();
+      await formBond(spammer, { counterparty: partnerNpub, bondId, state: 'proposed', relays });
+      await acceptBond(partner, { bondId, relays });
+      for (let i = 0; i < 50; i++) {
+        await reaffirmBond(spammer, { bondId, counterparty: partnerNpub, relays });
+      }
+      await publishIntent(spammer, { seeking: ['collaboration'], about: 'farmed record', relays });
+    }
+
+    const { candidates } = await discover(relays, {}, keypairFromSecret(browser).pubkeyHex);
+    for (const spammer of spammers) {
+      const farmed = candidates.find((c) => c.author === keypairFromSecret(spammer).pubkeyHex);
+      expect(farmed).toBeDefined();
+      // 100 events between the two authors, counted as 1 + 1 = 2 total.
+      expect(farmed?.record.reaffirmations).toBe(1);
+    }
+  });
+
+  it('control: distinct reaffirmed bonds still accumulate per author', async () => {
+    const spammer = secretFromNsec(generateNostrKeypair().nsec);
+    const bondId = newBondId();
+    // Real mutual bonds first (reaffirmBond requires them).
+    await formBond(spammer, { counterparty: partnerNpub, bondId, state: 'proposed', relays });
+    await acceptBond(partner, { bondId, relays });
+    for (let i = 0; i < 50; i++) {
+      await reaffirmBond(spammer, { bondId, counterparty: partnerNpub, relays });
+    }
+    // One reaffirmation of a DIFFERENT bond must still count on top of the folded spam.
+    const otherBond = newBondId();
+    await formBond(spammer, { counterparty: partnerNpub, bondId: otherBond, state: 'proposed', relays });
+    await acceptBond(partner, { bondId: otherBond, relays });
+    await reaffirmBond(spammer, { bondId: otherBond, counterparty: partnerNpub, relays });
+    await publishIntent(spammer, { seeking: ['collaboration'], about: 'mixed record', relays });
+
+    const { candidates } = await discover(relays, {}, keypairFromSecret(browser).pubkeyHex);
+    const farmed = candidates.find((c) => c.author === keypairFromSecret(spammer).pubkeyHex);
+    expect(farmed?.record.reaffirmations).toBe(2);
+  });
+});
