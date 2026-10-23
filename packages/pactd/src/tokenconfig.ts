@@ -9,10 +9,10 @@
 // loud warning at startup when it is set).
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { pactHome } from 'pact-core';
+import { pactHome, writeSecretFile } from 'pact-core';
 
 export function tokenPath(): string {
   return join(pactHome(), 'token');
@@ -31,15 +31,23 @@ function loadOrCreateToken(): string {
   try {
     if (existsSync(tokenPath())) {
       const existing = readFileSync(tokenPath(), 'utf8').trim();
-      if (existing) return existing;
+      if (existing) {
+        // Heal a planted loose mode on the read path — the file may predate the
+        // hardened writer.
+        try {
+          chmodSync(tokenPath(), 0o600);
+        } catch {
+          // best effort: a foreign-owned file is still usable
+        }
+        return existing;
+      }
     }
   } catch {
     // fall through and regenerate
   }
   const token = randomBytes(24).toString('base64url');
   try {
-    mkdirSync(pactHome(), { recursive: true });
-    writeFileSync(tokenPath(), token, { mode: 0o600 });
+    writeSecretFile(tokenPath(), token);
   } catch {
     // non-persistent token is still better than none for this run
   }

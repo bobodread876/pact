@@ -50,6 +50,11 @@ function req(opts: {
 }): Promise<RawResponse> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.token !== undefined) headers.authorization = `Bearer ${opts.token}`;
+  // A body must declare application/json — the daemon's no-preflight CSRF
+  // gate (readJson) refuses body-bearing requests without it.
+  if (opts.body !== undefined && !Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
+    headers['content-type'] = 'application/json';
+  }
   return new Promise((resolve, reject) => {
     const r = httpRequest(
       {

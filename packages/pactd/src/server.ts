@@ -98,8 +98,12 @@ function hostAllowed(req: IncomingMessage): boolean {
   if (!host) return false;
   const name = hostnameOf(host);
   if (LOOPBACK_HOSTS.has(name)) return true;
+  // DNS-rebinding defense: a rebound Host (evil.example resolving to
+  // 127.0.0.1) is refused even with a valid token — the open routes (/, /healthz)
+  // answer to anyone who can reach the port, and a rebound page reaches exactly
+  // those. Loopback names and the operator's PACT_ALLOWED_HOSTS pass.
   if (ALLOWED_HOSTS.includes('*') || ALLOWED_HOSTS.includes(name) || ALLOWED_HOSTS.includes(host.toLowerCase())) return true;
-  return Boolean(TOKEN) && ALLOWED_HOSTS.length === 0;
+  return !LOOPBACK_BIND && ALLOWED_HOSTS.length === 0 && Boolean(TOKEN);
 }
 
 /**
@@ -152,6 +156,16 @@ function positiveIntEnv(name: string, fallback: number): number {
   const n = Math.floor(Number(process.env[name]));
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+// The configured bind host (index.ts listens with the same default). Loopback
+// binds enforce an anti-DNS-rebinding Host allowlist; non-loopback binds rely
+// on the Origin check + token.
+export const HOST = process.env.PACT_HOST ?? '127.0.0.1';
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}
+const LOOPBACK_BIND = isLoopbackHost(HOST);
 
 // In-flight redemption guard: a payment hash being redeemed right now. The
 // paid path below awaits across the wallet lookup and relay reads, so two
@@ -324,7 +338,14 @@ function authorized(req: IncomingMessage): boolean {
 const MAX_REQUEST_RELAYS = 10;
 
 function relaysFrom(url: URL): string[] {
-  const relays = [...new Set(url.searchParams.getAll('relay'))].slice(0, MAX_REQUEST_RELAYS);
+  // ?relay= overrides are caller-controlled: sanitize every entry (bare
+  // ws:// or wss:// only — no userinfo, no control chars) so a hostile
+  // override can never become a dial target (SSRF pivot). If nothing valid
+  // remains, the configured relay set answers.
+  const relays = [...new Set(url.searchParams.getAll('relay'))]
+    .slice(0, MAX_REQUEST_RELAYS)
+    .map((r) => sanitizeRelayUrl(r))
+    .filter((r): r is string => r !== undefined);
   return relays.length ? relays : RELAYS;
 }
 
@@ -377,9 +398,13 @@ export function createDaemon(options: DaemonOptions = {}) {
       // No CORS preflight surface: OPTIONS is not a route (nothing to answer
       // a preflight with, so browsers refuse to send the real request).
       if (method === 'OPTIONS') return json(res, 404, { error: 'not found', path });
-      // A non-GET must declare a JSON body. Browsers can only send that
-      // cross-origin after a CORS preflight, which pactd never approves.
-      if (method !== 'GET' && method !== 'HEAD') {
+      // A non-GET carrying a body must declare application/json. Browsers can
+      // only send such a request cross-origin after a CORS preflight, which
+      // pactd never approves. (Bodyless POSTs carry nothing a forged form can
+      // smuggle — /identity takes no fields — so they pass.)
+      const declaredLength = Number(req.headers['content-length'] ?? 0);
+      const bodyBearing = declaredLength > 0 || Boolean(req.headers['transfer-encoding']);
+      if (method !== 'GET' && method !== 'HEAD' && bodyBearing) {
         const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
         if (type !== 'application/json') {
           return json(res, 415, { error: 'Content-Type must be application/json' });
@@ -729,6 +754,8 @@ async function handleVerify(
   ln: LightningProvider | null,
   caller: { authed: boolean; client: string },
 ): Promise<void> {
+  // eslint-disable-next-line no-console
+  console.error('[hv] authed=%s client=%s TOKEN=%s', caller.authed, caller.client, typeof TOKEN === 'string' ? 'set' : String(TOKEN));
   const bondId = url.searchParams.get('bond_id');
   if (!bondId) return json(res, 400, { error: 'bond_id query param required' });
   const partyParams = url.searchParams.getAll('party');
@@ -748,6 +775,8 @@ async function handleVerify(
       // Each invoice is a bearer token for one verification, so it is never
       // shared between requesters; issuing is bounded instead.
       if (!caller.authed) {
+        // eslint-disable-next-line no-console
+        console.error('[cap-debug] client=%s perClient=%d global=%d maxP=%d', caller.client, pendingVerificationCountFor(caller.client), pendingVerificationCount(), VERIFY_MAX_PENDING);
         if (pendingVerificationCountFor(caller.client) >= VERIFY_MAX_PENDING_PER_CLIENT) {
           res.setHeader('Retry-After', '60');
           return json(res, 429, { error: 'too many unpaid verification invoices outstanding for this client — pay or wait for them to expire' });
@@ -827,6 +856,11 @@ async function handleVerify(
       // redemption stays reusable, and the caller sees the error.
       const secret = caller.authed && hasIdentity() ? loadSecret() : undefined;
       verdict = await verifyBond(bondId, relays, { ...(secret ? { secret } : {}), ...(parties.length ? { parties } : {}) });
+      // No relay answered at all: fulfillment never happened. 502 (retryable,
+      // invoice untouched) instead of serving a verdict built from nothing.
+      if (verdict.relaysReached.length === 0) {
+        throw new HttpError(502, 'no relay answered — verification could not be fulfilled; the invoice is not consumed, retry');
+      }
     } finally {
       inflightRedemptions.delete(paymentHash);
     }

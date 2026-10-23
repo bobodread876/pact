@@ -97,12 +97,17 @@ async function waitFor(check: () => boolean, ms = 5000): Promise<void> {
 }
 
 describe('pactd operator UI', () => {
-  it('never ships the bearer token in served HTML and sets a CSP', () => {
-    for (const publicMode of [false, true]) {
-      const html = renderUI(TEST_TOKEN, undefined, undefined, publicMode);
-      expect(html).not.toContain(TEST_TOKEN);
-      expect(html).toContain('http-equiv="Content-Security-Policy"');
-    }
+  it('never ships the bearer token in served HTML (unless embedToken: behind an auth proxy) and sets a CSP', () => {
+    // Default render: the token argument is deliberately unused — the page
+    // must not carry it (GET / is unauthenticated).
+    const plain = renderUI(TEST_TOKEN, undefined, undefined, false);
+    expect(plain).not.toContain(TEST_TOKEN);
+    expect(plain).toContain('http-equiv="Content-Security-Policy"');
+    // embedToken=true = the listener sits behind an authenticating proxy
+    // (PACT_UI_EMBED_TOKEN) — the ONLY case where the page carries the token.
+    const embedded = renderUI(TEST_TOKEN, undefined, undefined, true);
+    expect(embedded).toContain(TEST_TOKEN);
+    expect(embedded).toContain('http-equiv="Content-Security-Policy"');
   });
 
   it('renders relay-supplied bond data as inert text, never as attributes', async () => {

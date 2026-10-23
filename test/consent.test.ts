@@ -121,26 +121,45 @@ describe('junk-signature griefing (bug 3)', () => {
     await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', relays });
     await acceptBond(bob, { bondId, relays });
     expect((await verifyBond(bondId, relays)).mutual).toBe(true);
-    // When: Mallory drops a junk-signature event on the same d tag.
+    // When: Mallory drops a junk-signature event on the same d tag. The relay
+    // under test must store it: real relays verify, but a misconfigured one
+    // (signature checks skipped) is the transport this attack needs.
+    relay.setStoreInvalid(true);
     const doc = makeBondDocument(malloryDid, aliceNpub, { bondId, state: 'active' });
     const signed = buildBondStateEvent(doc, mallory, { createdAt: Math.floor(Date.now() / 1000) });
     await publishEvent(relays, { ...signed, sig: BAD_SIG });
+    relay.setStoreInvalid(false);
     // Then: the invalid record is excluded from the verdict — mutual stands.
     const verdict = await verifyBond(bondId, relays);
     expect(verdict.mutual).toBe(true);
     expect(verdict.bonds.filter((b) => !b.signature_valid)).toHaveLength(1);
   });
 
-  it('spam crowding the relay\'s result window surfaces as truncated (inconclusive)', async () => {
+  it('spam crowding the relay\'s result window surfaces as truncated (inconclusive)', { timeout: 60_000 }, async () => {
     // Given: 50 junk sides (the public result limit) fill the window BEFORE the
     // honest pair arrives — the relay answer can no longer contain the truth.
     const bondId = newBondId();
-    for (let i = 0; i < 50; i++) {
-      const spam = secretFromNsec(generateNostrKeypair().nsec);
-      await formBond(spam, { counterparty: aliceNpub, bondId, state: 'active', relays });
-    }
+    // One stamp-wait per author costs up to a second; the spam authors are
+    // independent, so publish them concurrently (the first-stamp wait then
+    // overlaps).
+    await Promise.all(
+      Array.from({ length: 50 }, () => {
+        const spam = secretFromNsec(generateNostrKeypair().nsec);
+        return formBond(spam, { counterparty: aliceNpub, bondId, state: 'active', relays });
+      }),
+    );
     await formBond(alice, { counterparty: bobNpub, bondId, state: 'proposed', relays });
     await acceptBond(bob, { bondId, relays });
+    // When: 200 more junk sides arrive (the public query limit is 200 — the
+    // window now holds 250+ events for this bond, so any single REQ result
+    // cannot contain them all). The honest pair — published before the flood
+    // — may be crowded out of the newest-first window.
+    await Promise.all(
+      Array.from({ length: 200 }, () => {
+        const spam2 = secretFromNsec(generateNostrKeypair().nsec);
+        return formBond(spam2, { counterparty: aliceNpub, bondId, state: 'active', relays });
+      }),
+    );
     // When: the bond is listed / verified.
     const listed = await listBonds({ '#d': [bondId] }, relays);
     const verdict = await verifyBond(bondId, relays);
@@ -260,8 +279,10 @@ describe('selective-disclosure proof binding (bug 6)', () => {
 describe('daemon shares the core predicate', () => {
   const serverSource = readFileSync(new URL('../packages/pactd/src/server.ts', import.meta.url), 'utf8');
 
-  it('pactd imports computeMutual from pact-core and carries no local mutual predicate', () => {
-    expect(serverSource).toContain('computeMutual');
+  it('pactd delegates the mutuality verdict to pact-core (verifyBond) and carries no local mutual predicate', () => {
+    expect(serverSource).toContain('verifyBond');
+    // no inline re-derivation of mutuality in the daemon
+    expect(serverSource).not.toContain('findMutualPair(');
     expect(serverSource).not.toContain('.every((b) => b.signature_valid)');
   });
 });

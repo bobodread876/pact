@@ -156,10 +156,15 @@ export function pendingVerificationCountFor(client: string | undefined, now = Da
 export function recordVerificationInvoice(
   hash: string,
   bondId: string,
-  now = Date.now(),
+  // The bolt11 string OR the issue timestamp (ms). Both forms appear: the
+  // daemon passes the invoice through the 5-arg form; the audit-era call
+  // shape passes the invoice third.
+  nowOrInvoice: number | string = Date.now(),
   client?: string,
   invoice?: string,
 ): void {
+  const now = typeof nowOrInvoice === 'number' ? nowOrInvoice : Date.now();
+  invoice = invoice ?? (typeof nowOrInvoice === 'string' ? nowOrInvoice : undefined);
   const map = loadVerifications();
   if (map.has(hash)) return;
   map.set(hash, { bondId, consumed: false, issuedAt: now, ...(client ? { client } : {}), ...(invoice ? { invoice } : {}) });

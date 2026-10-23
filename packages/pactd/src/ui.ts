@@ -20,7 +20,7 @@ export function renderUI(
   // token is otherwise operator-supplied (sessionStorage / #token= fragment).
   embedToken = false,
 ): string {
-  const tokenLiteral = embedToken ? JSON.stringify(_token ?? '').replace(/</g, '\u003c') : '""';
+  const tokenLiteral = embedToken ? JSON.stringify(_token ?? '').replace(/</g, '\\u003c') : '""';
   const publicPortJson = JSON.stringify(publicPort ?? '');
   const relayPublicPortJson = JSON.stringify(relayPublicPort ?? '');
   return `<!doctype html>

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
+import { paymentPolicyViolation } from './policy.js';
+
 // pact-mcp is a thin MCP adapter over a running `pactd` daemon. The daemon holds
 // the agent's key, relay config, and wallet; this server just exposes its
 // operations as MCP tools. So an MCP agent (Claude Code, etc.) acts as that one
@@ -248,12 +250,17 @@ export function createServer(): McpServer {
 
   server.tool(
     'pact_pay_invoice',
-    "Pay a bolt11 Lightning invoice from the daemon's wallet. SPENDS sats (subject to your wallet's NWC budget). For an amountless invoice, pass amountSats to set the amount. Returns status: 'settled' (confirmed paid), 'pending' (submitted but unconfirmed — DO NOT retry, may double-spend; check pact_list_transactions), or 'failed' (rejected, no funds moved).",
+    "Pay a bolt11 Lightning invoice from the daemon's wallet. SPENDS sats (subject to your wallet's NWC budget). Gated by the operator's payment policy: refuses unless PACT_MCP_ALLOW_PAYMENTS=1, and refuses above PACT_MCP_MAX_PAYMENT_SATS (default 1000 sats) even then. For an amountless invoice, pass amountSats to set the amount. Returns status: 'settled' (confirmed paid), 'pending' (submitted but unconfirmed — DO NOT retry, may double-spend; check pact_list_transactions), or 'failed' (rejected, no funds moved).",
     {
       invoice: z.string().describe('The bolt11 invoice to pay.'),
       amountSats: z.number().int().positive().optional().describe('Amount in sats — required only for amountless invoices.'),
     },
-    async ({ invoice, amountSats }) => text(await daemon('POST', '/wallet/pay', { invoice, amountSats })),
+    async ({ invoice, amountSats }) => {
+      // Payment policy gate (audit F-05): consulted per call, never at module load.
+      const refusal = paymentPolicyViolation({ invoice, amountSats });
+      if (refusal) return text(refusal);
+      return text(await daemon('POST', '/wallet/pay', { invoice, amountSats }));
+    },
   );
 
   server.tool(

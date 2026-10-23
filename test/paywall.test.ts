@@ -51,7 +51,11 @@ function req(opts: { method?: string; path: string; headers?: Record<string, str
         port: daemon!.port,
         path: opts.path,
         method: opts.method ?? 'GET',
-        headers: { authorization: `Bearer ${TOKEN}`, ...(opts.headers ?? {}) },
+        headers:
+          opts.headers !== undefined
+            ? // headers passed explicitly = exact auth posture ({} = anonymous)
+              opts.headers
+            : { authorization: `Bearer ${TOKEN}` },
       },
       (res) => {
         let body = '';
@@ -143,7 +147,20 @@ describe('invoice issuance is bounded (#11): per-bond reuse + global cap', () =>
     expect(wallet.counts.make_invoice).toBe(minted + 1);
     expect(other.payment_hash).not.toBe((await expectInvoice('urn:mate:reuse-1')).payment_hash);
     // cap = 2 outstanding: reuse-1 and reuse-2 hold the slots
-    const over = await verifyBond('urn:mate:reuse-3');
+    const over = await req({ path: '/bonds/verify?bond_id=urn:mate:reuse-3', headers: {} });
+    if (over.status !== 429) {
+      const fsMod = await import('node:fs');
+      const pathMod = await import('node:path');
+      const dir = process.env.PACT_HOME;
+      // eslint-disable-next-line no-console
+      console.log('PACT_HOME:', dir, 'files:', fsMod.readdirSync(dir!));
+      for (const f of fsMod.readdirSync(dir!)) {
+        if (f.endsWith('.json')) {
+          // eslint-disable-next-line no-console
+          console.log(f, '=>', fsMod.readFileSync(pathMod.join(dir!, f), 'utf8').slice(0, 400));
+        }
+      }
+    }
     expect(over.status).toBe(429);
     expect(typeof over.json().error).toBe('string');
     expect(wallet.counts.make_invoice).toBe(minted + 1);
@@ -227,7 +244,7 @@ describe('NWC response authentication (#4)', () => {
     const pay = await req({
       method: 'POST',
       path: '/wallet/pay',
-      headers: { 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
       body: JSON.stringify({ invoice }),
     });
     expect(pay.status).toBe(200);

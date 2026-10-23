@@ -29,8 +29,17 @@ node packages/pactd/dist/index.js        # listens on 127.0.0.1:8787
 | `pact_wallet` | `GET /wallet` — Lightning wallet status + balance |
 | `pact_create_invoice` | `POST /wallet/invoice` — create an invoice to receive sats |
 | `pact_lookup_invoice` | `GET /wallet/invoice` — check if an invoice is paid |
-| `pact_pay_invoice` | `POST /wallet/pay` — pay a bolt11 invoice (spends sats) |
+| `pact_pay_invoice` | `POST /wallet/pay` — pay a bolt11 invoice (spends sats; gated — see Payment policy) |
 | `pact_list_transactions` | `GET /wallet/transactions` — recent payments (reliable audit; reflects settlements) |
+
+## Payment policy
+
+`pact_pay_invoice` moves real sats, and MCP agents execute LLM-suggested tool calls — so payment execution sits behind two operator env vars, read fresh on every call:
+
+- **`PACT_MCP_ALLOW_PAYMENTS=1`** — required (exactly `1`) for `pact_pay_invoice` to run at all. Unset — the default — the tool answers with a structured refusal (`{ error: 'payments disabled by policy', howToEnable: 'set PACT_MCP_ALLOW_PAYMENTS=1' }`) and never contacts the daemon. This keeps indirect prompt injection (relay text, bond metadata the agent read) from having a live path to money movement.
+- **`PACT_MCP_MAX_PAYMENT_SATS`** — per-payment cap in whole sats, default `1000` (fractional values are clipped to whole sats, matching pactd's env parsing). Over-cap payments are refused with a structured error even when payments are enabled; the check covers both the explicit `amountSats` argument and the amount embedded in the invoice itself.
+
+Only the spending tool is gated: read tools, bond-forming, and `pact_create_invoice` / `pact_lookup_invoice` (creating and checking invoices — the receive side) stay open.
 
 ## Install & register with Claude Code
 
