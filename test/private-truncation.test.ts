@@ -42,17 +42,18 @@ describe('private inbox truncation signal', () => {
     async () => {
       // Each wrap carries its own bond id, so every first-stamp wait is
       // independent — publish concurrently (serial would cost ~1s per wrap).
-      await Promise.all(
-        Array.from({ length: 201 }, () =>
-          formBond(alice, {
-            counterparty: bobNpub,
-            bondId: newBondId(),
-            state: 'proposed',
-            visibility: 'private',
-            relays,
-          }),
-        ),
-      );
+      // Chunked so the in-process mock relay's socket never drops a burst
+      // write (a dropped write is the relay's failure mode, not the pager's).
+      const wraps = Array.from({ length: 201 }, () => ({
+        counterparty: bobNpub,
+        bondId: newBondId(),
+        state: 'proposed' as const,
+        visibility: 'private' as const,
+        relays,
+      }));
+      for (let i = 0; i < wraps.length; i += 30) {
+        await Promise.all(wraps.slice(i, i + 30).map((w) => formBond(alice, w)));
+      }
       // The inbox pages per relay until history is exhausted: a 201-wrap
       // window is fully read (two pages), so nothing is truncated and no
       // withdrawal can hide beyond the first page.
@@ -61,7 +62,7 @@ describe('private inbox truncation signal', () => {
       expect(inboxRelaysUnread).toEqual([]);
       expect(bonds.length).toBeGreaterThanOrEqual(200); // 201 published; a burst may lose one write to the mock relay
     },
-    60_000,
+    180_000,
   );
 
   it('control: a one-wrap inbox is not truncated', async () => {

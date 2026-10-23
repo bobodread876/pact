@@ -51,6 +51,8 @@ describe('pact CLI: a flooded inbox', () => {
       expect(refused.stderr).toMatch(/--allow-incomplete-inbox/);
 
       const forced = await pact(home, ['bond', 'accept', bondId, '--allow-incomplete-inbox', ...rel]);
+      // eslint-disable-next-line no-console
+      if (forced.code !== 0) console.log('FORCED-FAIL stdout:', forced.stdout, 'stderr:', forced.stderr);
       expect(forced.code).toBe(0);
       expect(forced.stdout).toMatch(/Accepted bond .* \(private\)/);
 

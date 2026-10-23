@@ -67,6 +67,13 @@ export function candidateLine(c: Candidate): string {
   return c.about ? line + `\n          “${sanitizeTerminal(c.about)}”` : line;
 }
 
+// Inbox-note helpers (used by the bonds listing and the verify verdict): the
+// private inbox could not be read to the end, or some relays do not serve it.
+const INBOX_NOTE =
+  '\n  (inbox incomplete: the private inbox could not be read to the end — private sides may be missing)';
+const unreadNote = (relays?: string[]) =>
+  relays && relays.length ? `\n  (private inbox not served by: ${relays.join(', ')})` : '';
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
@@ -82,6 +89,7 @@ async function main(): Promise<void> {
       kind: { type: 'string' },
       from: { type: 'string' },
       'no-history': { type: 'boolean' },
+      'allow-incomplete-inbox': { type: 'boolean' },
       author: { type: 'string' },
       counterparty: { type: 'string' },
       'bond-id': { type: 'string' },
@@ -199,6 +207,7 @@ async function main(): Promise<void> {
           counterparty: values.from as string | undefined,
           state: values.state as BondState | undefined,
           visibility: values.private ? 'private' : values.public ? 'public' : undefined,
+          allowIncompleteInbox: Boolean(values['allow-incomplete-inbox']),
         });
         const reached = result.stateEvent.relays.filter((r) => r.accepted).length;
         out(
@@ -210,18 +219,20 @@ async function main(): Promise<void> {
       }
 
       if (sub === 'list') {
-        const { relaysReached, bonds } = await pact.listBonds({
+        const { relaysReached, bonds, inboxTruncated, inboxRelaysUnread } = await pact.listBonds({
           author: values.author as string | undefined,
           counterparty: values.counterparty as string | undefined,
           bondId: values['bond-id'] as string | undefined,
           visibility: (values.visibility as 'all' | 'public' | 'private' | undefined) ?? 'all',
         });
+        const note = inboxTruncated ? INBOX_NOTE : '';
+        const unread = unreadNote(inboxRelaysUnread);
         out(
           json,
           bonds.length
-            ? `${bonds.length} bond(s) [${relaysReached.length} relay(s)]:\n${bonds.map(bondLine).join('\n')}`
-            : 'No bonds found.',
-          { relaysReached, bonds },
+            ? `${bonds.length} bond(s) [${relaysReached.length} relay(s)]:\n${bonds.map(bondLine).join('\n')}${note}${unread}`
+            : `No bonds found.${note}${unread}`,
+          { relaysReached, bonds, inboxTruncated, inboxRelaysUnread },
         );
         return;
       }
@@ -260,9 +271,17 @@ async function main(): Promise<void> {
           return;
         }
         const result = await pact.verifyBond(bondId);
+        // An incomplete read changes what the verdict means: a "not mutual"
+        // on a partial inbox may just be a hidden revocation — say so.
+        const truncNote =
+          result.inboxTruncated || result.truncated
+            ? 'not mutual: inbox incomplete' + (result.inboxTruncated ? INBOX_NOTE : '')
+            : result.mutual
+              ? 'MUTUAL ✓'
+              : 'not mutual';
         out(
           json,
-          `Bond '${bondId}': ${result.mutual ? 'MUTUAL ✓' : 'not mutual'} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).\n${result.bonds.map(bondLine).join('\n')}`,
+          `Bond '${bondId}': ${truncNote} — ${result.count} signed state(s) across ${result.relaysReached.length} relay(s).\n${result.bonds.map(bondLine).join('\n')}`,
           result,
         );
         if (!result.mutual) process.exitCode = 1;
