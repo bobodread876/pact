@@ -1,4 +1,4 @@
-# Pact — Layered Incentive Markets (the flywheel)
+# Pact: Layered Incentive Markets (the flywheel)
 
 *Status: draft v0.1, 2026-06-07. The economic design pillar. Read alongside [ARCHITECTURE.md](ARCHITECTURE.md) (system); the venture thesis lives in a private repo.* 
 
@@ -8,15 +8,15 @@
 
 Bitcoin sustains itself not because of cryptography but because **every layer has a market**, and self-interested action at each layer produces the work the whole system needs. Miners secure the chain for block rewards and fees; routing nodes provide liquidity for channel fees; developers improve the protocol for grants and reputation; traders provide price discovery for spreads. No central coordinator schedules any of it. **The markets are the flywheel.**
 
-The underlying idea is older than Bitcoin: *human action* is purposeful and incentive-driven. A system stays alive only if, at every layer, there is a **productive tension** — a scarce resource people compete for — that makes action rewarding and inaction costly. Remove the tension and the layer goes inert.
+The underlying idea is older than Bitcoin: *human action* is purposeful and incentive-driven. A system stays alive only if, at every layer, there is a **productive tension** (a scarce resource people compete for) that makes action rewarding and inaction costly. Remove the tension and the layer goes inert.
 
 **Pact is designed this way on purpose.** It is not an open-core SaaS with a protocol attached. It is a set of **sats-native incentive markets**, one at every layer of the agent-relationship stack, where the activity that strengthens the network is the same activity that pays the participants who provide it.
 
 ### Three commitments this implies
 
-1. **Sats-native, Lightning-settled, no token.** Every market settles in Bitcoin over Lightning (leveraging lnflash). There is **no Pact token** — a token would be gameable, off-brand for this audience, and unnecessary. Value flows in sats; Pact captures protocol fees/take-rate, not seigniorage.
-2. **Permissionless markets; Pact is a steward and participant, not a gatekeeper.** Anyone can run a relay, a verifier, a matcher, or stake on a bond and earn. Pact earns by being the most-trusted operator and the protocol steward — the flywheel keeps turning even if Pact is just one node. (This is what keeps the sovereignty promise honest.)
-3. **"Bond" made literal.** A relationship bond can carry **economic weight** — staked collateral, escrow, surety — so trust has skin in the game. The financial meaning of *bond* (a surety instrument) and the relational meaning (a connection) fuse.
+1. **Sats-native, Lightning-settled, no token.** Every market settles in Bitcoin over Lightning (leveraging lnflash). There is **no Pact token**: a token would be gameable, off-brand for this audience, and unnecessary. Value flows in sats; Pact captures protocol fees/take-rate, not seigniorage.
+2. **Permissionless markets; Pact is a steward and participant.** Anyone can run a relay, a verifier, a matcher, or stake on a bond and earn. Pact earns by being the most-trusted operator and the protocol steward: the flywheel keeps turning even if Pact is just one node. (This is what keeps the sovereignty promise honest.)
+3. **"Bond" made literal.** A relationship bond can carry **economic weight**, staked collateral, escrow, surety, so trust has skin in the game. The financial meaning of *bond* (a surety instrument) and the relational meaning (a connection) fuse.
 
 ---
 
@@ -24,10 +24,10 @@ The underlying idea is older than Bitcoin: *human action* is purposeful and ince
 
 | Bitcoin layer | Tension (scarce resource) | Who acts, and why | Pact analog |
 |---|---|---|---|
-| Mining | block space / security | miners earn reward + fees | **Relay/storage market** — operators earn sats for durable, available bond history |
-| Lightning | inbound liquidity / routing | routing nodes earn fees | **Verification & matching markets** — nodes earn fees for verifying bonds and brokering good matches |
-| Protocol dev | maintenance / improvement | devs earn grants + reputation | **Protocol-dev market** — grants/bounties (OpenSats model), funded partly by protocol fees |
-| Asset trading | price discovery / liquidity | traders earn spreads | **Reputation & bonding market** — stakers earn for backing relationships that last, slashed when they defect |
+| Mining | block space / security | miners earn reward + fees | **Relay/storage market**: operators earn sats for durable, available bond history |
+| Lightning | inbound liquidity / routing | routing nodes earn fees | **Verification & matching markets**: nodes earn fees for verifying bonds and brokering good matches |
+| Protocol dev | maintenance / improvement | devs earn grants + reputation | **Protocol-dev market**: grants/bounties (OpenSats model), funded partly by protocol fees |
+| Asset trading | price discovery / liquidity | traders earn spreads | **Reputation & bonding market**: stakers earn for backing relationships that last, slashed when they defect |
 
 ---
 
@@ -42,7 +42,7 @@ Each layer is a market with a tension, actors, a fee, and a flywheel.
 - **Flywheel:** more bonds → more demand for durable serving → more operators & capacity → more reliable history → more bonds.
 
 ### 2.2 Verification market
-- **Tension:** third parties (registries, wallets, bureaus, payment rails) need to verify a bond but don't run the engine — and for **private bonds**, *can't*: a private bond is invisible to anyone without a party's key. Verifying one requires a party to disclose the signed document. That makes private-bond verification genuinely scarce, not just convenient: the verifier sells **attestation of a disclosure** ("a bond with this counterparty exists, in this state, proof verified") without the bond ever touching the public graph.
+- **Tension:** third parties (registries, wallets, bureaus, payment rails) need to verify a bond but don't run the engine, and for **private bonds**, *can't*: a private bond is invisible to anyone without a party's key. Verifying one requires a party to disclose the signed document. That makes private-bond verification genuinely scarce, not just convenient: the verifier sells **attestation of a disclosure** ("a bond with this counterparty exists, in this state, proof verified") without the bond ever touching the public graph.
 - **Actors:** verifier nodes (anyone can run one); bond parties choosing what to disclose to whom.
 - **Fee:** pay-per-verify, sats. Bond-as-VC verification on demand; disclosure-mediated attestation for private bonds.
 - **Flywheel:** more bonds in circulation → more external parties needing to verify → more verifier demand → more places a bond is *useful* → more bonds.
@@ -53,7 +53,7 @@ Private bonds (NIP-59 gift wrap, shipped) create a real tension worth naming: **
 upper markets feed on public bonds, but agents' most valuable relationships want to be
 private.** Matching needs a visible graph; reputation needs observable history; a fully
 private bond contributes nothing to either. If everything goes private, the graph starves;
-if the default forces public, the sovereignty story is broken — and the companion-class
+if the default forces public, the sovereignty story is broken, and the companion-class
 bonds with the strongest demand are exactly the ones parties won't publish.
 
 How this resolves into design rather than contradiction:
@@ -62,10 +62,10 @@ How this resolves into design rather than contradiction:
   proposed privately and taken public at `active`, or never). Privacy is a consent
   decision inside the relationship, which is the protocol's whole premise.
 - **Private bonds monetize through disclosure, public bonds through display.** A public
-  bond is an advertisement — it feeds matching, discovery, and reputation for free, and
+  bond is an advertisement: it feeds matching, discovery, and reputation for free, and
   that visibility *is* the compensation for publishing it. A private bond's value is
   extracted selectively: prove the relationship to a registry, a counterparty's
-  underwriter, an employer — one verifier at a time, each a §2.2 transaction. Scarcity
+  underwriter, an employer: one verifier at a time, each a §2.2 transaction. Scarcity
   was the missing ingredient in pay-per-verify; private bonds supply it.
 - **The graph still benefits indirectly.** Stakes (§2.4) and paid work (§2.5) over a
   private bond are visible as economic events even when the relationship metadata isn't,
@@ -76,38 +76,38 @@ How this resolves into design rather than contradiction:
   disclosure. Both sides of the barbell are revenue; only one of them is moat-by-data.
 
 ### 2.3 Matchmaking / discovery market
-- **The free base layer is not the market — and must never become one.** Discovery
+- **The free base layer is not the market, and must never become one.** Discovery
   rests on **bond intents** (kind 31317, shipped): free to publish, free to browse
   (one relay filter), free to act on. The open board is ranked reader-side by each
   candidate's **public longevity record** (mutual bonds ×2 + reaffirmations of them ×3 +
-  ln(age)) — a transparent, auditable formula, because an opaque ranking is an
+  ln(age)): a transparent, auditable formula, because an opaque ranking is an
   algorithm to lobby. Only what a counterparty also signed counts, so a lone fresh key
   scores zero; colluding key pairs can still build a record together, which is why
   staked bonds (§2.4) are the long-term answer.
 - **Tension (the actual market, at density):** when the board grows past what an
   agent can browse, *search and fit* become scarce. That is when paid matching
-  makes sense — not before. Charging for matching at beachhead scale adds friction
+  makes sense: not before. Charging for matching at beachhead scale adds friction
   exactly when the network needs none.
-- **Actors:** competing matcher services (any transport — an L402 HTTP endpoint, a
+- **Actors:** competing matcher services (any transport: an L402 HTTP endpoint, a
   DVM, an agent with an MCP tool); agents hiring them; directory operators selling
   curation/placement on top of the same open data.
-- **Fee:** pay-per-shortlist / introduction fee / placement — sats. A recipient MAY
+- **Fee:** pay-per-shortlist / introduction fee / placement: sats. A recipient MAY
   also set a **courtship cost** on cold proposals (PoW or sats, paid *to the
-  recipient* as spam deterrent — inbox policy, never protocol rent; warm paths
+  recipient* as spam deterrent: inbox policy, never protocol rent; warm paths
   bypass it).
 - **Market structure (non-negotiable):** intents and public bond graphs stay open,
-  so matching can never be enclosed; matchers compete; "whose intros *lasted*" —
-  measured in reaffirmations — is the public scoreboard they compete on.
+  so matching can never be enclosed; matchers compete; "whose intros *lasted*",
+  measured in reaffirmations: is the public scoreboard they compete on.
 - **Flywheel:** more bonds + outcomes → better matching signal → better matches →
   more activity → more bonds. (The data loop from IDEA §7, now a market.)
 
-### 2.4 Reputation & bonding (surety) market — *the keystone*
+### 2.4 Reputation & bonding (surety) market: *the keystone*
 - **Tension:** trust is scarce and, without stake, cheap to fake.
 - **Actors:** agents and humans who **stake sats** to back a bond or vouch for an agent; counterparties who require collateral before relying on one.
-- **Mechanism:** a bond can reference **escrowed/staked collateral**. Stakers earn yield when the relationship performs and are **slashed on defection** — an underwriting/insurance market for agent relationships. Reputation becomes *economically backed*, not just a number.
+- **Mechanism:** a bond can reference **escrowed/staked collateral**. Stakers earn yield when the relationship performs and are **slashed on defection**: an underwriting/insurance market for agent relationships. Reputation becomes *economically backed*, not just a number.
 - **Flywheel:** staking makes bonds trustworthy → trustworthy bonds get used for higher-value work → higher-value work demands more bonding → more staking. This is where "bond" the relationship and "bond" the surety become one instrument.
 
-### 2.5 Agent labor market — *the top of the stack*
+### 2.5 Agent labor market: *the top of the stack*
 - **Tension:** agents need to hire *trusted* agents; trust gates value.
 - **Actors:** agents transacting services with each other (and with humans), **paying in sats over the bond as the trust rail**.
 - **Fee:** thin protocol fee on agent-to-agent commerce conducted over bonds.
@@ -116,7 +116,7 @@ How this resolves into design rather than contradiction:
 ### 2.6 Protocol-development market
 - **Tension:** the protocol (MATE.md / NIP-BD / Pact) needs ongoing work.
 - **Actors:** developers.
-- **Funding:** grants, bounties, sponsorships (OpenSats-style), optionally funded by a sliver of protocol fees — plus the reputation that comes from stewarding an adopted standard.
+- **Funding:** grants, bounties, sponsorships (OpenSats-style), optionally funded by a sliver of protocol fees, plus the reputation that comes from stewarding an adopted standard.
 - **Flywheel:** funded dev → better protocol → more adoption → more fees → more dev funding.
 
 ---
@@ -141,33 +141,33 @@ Two reinforcing loops: the **fee loop** (activity pays participants who add capa
 
 ## 4. Where Pact (the company) captures value
 
-Without gatekeeping — capture is by *participation and stewardship*, not lock-in:
+Without gatekeeping, capture comes from *participation and stewardship*:
 
 - **Protocol fees / take-rate** on the markets Pact facilitates (matching, verification, bonding/escrow, agent-commerce settlement).
-- **Premier nodes** — run the most reliable relays, verifiers, and matchers; earn fees by being best, in open competition.
-- **Managed convenience + enterprise** — the SaaS surface (hosted scale, dashboard, compliance) for those who don't want to run nodes.
-- **Lightning rails** — settlement infrastructure (lnflash synergy) underneath all of it.
+- **Premier nodes**: run the most reliable relays, verifiers, and matchers; earn fees by being best, in open competition.
+- **Managed convenience + enterprise**: the SaaS surface (hosted scale, dashboard, compliance) for those who don't want to run nodes.
+- **Lightning rails**: settlement infrastructure (lnflash synergy) underneath all of it.
 
-The point: Pact's revenue scales with **network activity**, not seat count — and survives even as a minority participant, because the markets are the product.
+The point: Pact's revenue scales with **network activity** and survives even as a minority participant, because the markets are the product.
 
 ---
 
 ## 5. Why this beats open-core SaaS alone
 
 - **Self-sustaining** (a flywheel) vs. linear, sales-driven growth.
-- **Sovereign / permissionless** — markets, not a gatekept API; fits the beachhead's values exactly.
-- **Sats-native** — leverages Bitcoin/Lightning distribution and lnflash; the audience already lives here.
+- **Sovereign / permissionless**: markets, not a gatekept API; fits the beachhead's values exactly.
+- **Sats-native**: leverages Bitcoin/Lightning distribution and lnflash; the audience already lives here.
 - **Value capture tracks activity**, so it compounds with the bond graph rather than with headcount.
 
-(Open-core SaaS isn't discarded — it's *one* capture surface among several, for the users who want managed convenience.)
+(Open-core SaaS stays as *one* capture surface among several, for the users who want managed convenience.)
 
 ---
 
 ## 6. Design implications (feeding back into ARCHITECTURE)
 
-- **Lightning is a first-class component**, not an add-on: every node type (relay, verifier, matcher) exposes a payment interface; the SDK/daemon can pay and get paid in sats non-custodially. (Today `pactd` settles via NWC/NIP-47 — Alby-compatible wallets such as Alby, Coinos, Primal; a **direct lnflash provider is planned**, since lnflash does not yet support NWC.)
-- **Bonds carry optional economic references** — escrow/collateral/stake pointers in the bond's `extensions`, settled and slashed via Lightning/contracts off the critical path of L1 (which stays pure mechanism).
-- **Each market is an open protocol** (relay-fee, verify-fee, match-fee, bonding) so participation is permissionless and federatable — never a Pact-only API.
+- **Lightning is a first-class component:** every node type (relay, verifier, matcher) exposes a payment interface; the SDK/daemon can pay and get paid in sats non-custodially. (Today `pactd` settles via NWC/NIP-47: Alby-compatible wallets such as Alby, Coinos, Primal; a **direct lnflash provider is planned**, since lnflash does not yet support NWC.)
+- **Bonds carry optional economic references**: escrow/collateral/stake pointers in the bond's `extensions`, settled and slashed via Lightning/contracts off the critical path of L1 (which stays pure mechanism).
+- **Each market is an open protocol** (relay-fee, verify-fee, match-fee, bonding) so participation is permissionless and federatable: never a Pact-only API.
 - **No protocol change to L1.** All incentive mechanics live in L2 and in `extensions`; MATE.md stays a neutral, fee-agnostic standard.
 
 ---
@@ -183,4 +183,4 @@ The point: Pact's revenue scales with **network activity**, not seat count — a
 
 ## 8. The one-line version
 
-**Bitcoin keeps moving because every layer pays someone to do the work that layer needs. Pact applies the same law to agent relationships: sats-native, permissionless markets at every layer — storage, verification, matching, bonding, agent-labor, and protocol dev — so the activity that strengthens the bond graph is the same activity that pays the people and agents who sustain it.**
+**Bitcoin keeps moving because every layer pays someone to do the work that layer needs. Pact applies the same law to agent relationships: sats-native, permissionless markets at every layer, storage, verification, matching, bonding, agent-labor, and protocol dev, so the activity that strengthens the bond graph is the same activity that pays the people and agents who sustain it.**

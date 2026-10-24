@@ -1,4 +1,4 @@
-# Pact — Umbrel community app
+# Pact: Umbrel community app
 
 One-click install of `pactd` on [Umbrel](https://umbrel.com) via a community app store.
 
@@ -22,11 +22,11 @@ pact-pactd/
 
 - **Open** the app from your Umbrel dashboard → a **status web UI** (identity, bonds, wallet, capabilities). Click **Create identity** to mint the node's `did:nostr`.
 - **Connect a Lightning wallet** right in the UI: in **Alby Hub** (also an Umbrel app) create an app connection, copy its `nostr+walletconnect://…` URI, and paste it into Pact's wallet panel. No config/env editing. (Isolated Alby Hub sub-wallets are recommended.)
-- **Connect an external agent:** pactd generates a random bearer token on first run and persists it at `${APP_DATA_DIR}/data/.pact/token` (mode 600) — it is **not** derived from the Umbrel seed. Paste it into the UI's lock screen, or point an agent at `http://<umbrel-host>:3737` with that token. The UI's *"Connect an agent"* panel shows the exact `claude mcp add …` command; the token never appears in the page HTML.
+- **Connect an external agent:** pactd generates a random bearer token on first run and persists it at `${APP_DATA_DIR}/data/.pact/token` (mode 600): it is **not** derived from the Umbrel seed. Paste it into the UI's lock screen, or point an agent at `http://<umbrel-host>:3737` with that token. The UI's *"Connect an agent"* panel shows the exact `claude mcp add …` command; the token never appears in the page HTML.
 
 ## Notes
 
 - pactd holds the key locally under the app's data dir (`${APP_DATA_DIR}/data`); nothing is uploaded.
-- **External/agent access:** the daemon is exposed on host port **`3737`** (token-required, `PACT_PUBLIC_MODE=1`). Point an agent at `http://<umbrel-host>:3737` with the token from `${APP_DATA_DIR}/data/.pact/token`. Keep this on a **trusted LAN** — the direct port serves the UI without Umbrel's login in front of it (the page contains no token; the API still requires the bearer).
-- The Umbrel app URL (port 8787) is behind Umbrel's `app_proxy` login — good for the browser UI, but it blocks programmatic agents, which is why the direct `3737` port + token exists.
+- **External/agent access:** the daemon is exposed on host port **`3737`** (token-required, `PACT_PUBLIC_MODE=1`). Point an agent at `http://<umbrel-host>:3737` with the token from `${APP_DATA_DIR}/data/.pact/token`. Keep this on a **trusted LAN**: the direct port serves the UI without Umbrel's login in front of it (the page contains no token; the API still requires the bearer).
+- The Umbrel app URL (port 8787) is behind Umbrel's `app_proxy` login: good for the browser UI, but it blocks programmatic agents, which is why the direct `3737` port + token exists.
 - For a fully sovereign relay, set `PACT_RELAYS` to your own Nostr relay in `docker-compose.yml`; otherwise public relays are used.

@@ -1,6 +1,6 @@
 # pact-pactd
 
-The Pact **sidecar daemon** — the universal adapter. A local long-running process that **holds the agent's key** (isolated from the agent process) and exposes bond operations over `127.0.0.1` HTTP, so the relationship layer runs *alongside* any agent platform in any language.
+The Pact **sidecar daemon**: the universal adapter. A local long-running process that **holds the agent's key** (isolated from the agent process) and exposes bond operations over `127.0.0.1` HTTP, so the relationship layer runs *alongside* any agent platform in any language.
 
 ## Run
 
@@ -56,28 +56,28 @@ All endpoints except `/` and `/healthz` require `Authorization: Bearer <token>` 
 
 | Method · Path | Body / query | Does |
 |---|---|---|
-| `GET /` | — | status UI (unauthenticated; carries no token). 404 on the API-only listener |
-| `GET /healthz` | — | liveness, version, `auth` (token on?), wallet (unauthenticated) |
-| `GET /identity` | — | this agent's did:nostr / npub / pubkey (404 if none) |
+| `GET /` | n/a | status UI (unauthenticated; carries no token). 404 on the API-only listener |
+| `GET /healthz` | n/a | liveness, version, `auth` (token on?), wallet (unauthenticated) |
+| `GET /identity` | n/a | this agent's did:nostr / npub / pubkey (404 if none) |
 | `POST /identity` | `{ force?, pubkeyHex? }` | create the local identity; response carries `discoverable` (+ `hint`). `force: true` replaces an existing key only when `pubkeyHex` names the current one (409 otherwise); the old key is kept as `identity.<unix>.bak` |
 | `POST /bonds` | `{ counterparty, bondId?, state?, kind?, relays?, history?, private? }` | assemble + sign + publish a bond. `private: true` → NIP-59 gift wrap: off the public graph, parties-only (see below). An `accepted`/`active` state also returns `discoverable` / `hint` |
 | `POST /bonds/accept` | `{ bondId, counterparty?, kind?, state?, relays?, visibility?, allowIncompleteInbox? }` | accept a proposal by echoing its id; proposer auto-resolved from public events **or** the private inbox. Refuses (409) a proposal whose latest state is withdrawn / rejected / revoked. Refuses (409 `inbox incomplete`) when this node's private inbox could not be read to the end (a flood of gift wraps, a relay that stopped answering mid-read): a withdrawal may be hiding in the unread part, and junk never expires, so retrying does not help. `allowIncompleteInbox: true` is the deliberate operator override: accept on the partial history that was read. Echoes the proposal's channel and kind; if the proposal isn't visible and no `visibility` is passed it refuses (404) rather than guess public. Returns `discoverable` / `hint` |
 | `POST /bonds/reaffirm` | `{ bondId, counterparty?, visibility?, relays? }` | publish `bond.reaffirmed` on the bond's channel. The bond must be mutual with this node as a party (404 otherwise) unless both `counterparty` and `visibility` are given. 409 `inbox incomplete` when the lookup's private inbox read was partial; pass both fields to skip the lookup |
 | `GET /reaffirmations` | `?relay=` | reaffirmations of this node's bonds, by their parties, latest per (bond, author). `truncated: true` when the private inbox could not be read to the end (private ones may be missing) |
-| `GET /bonds` | `?bond_id= &counterparty= &author= &visibility= &relay=` | resolve + verify bonds across both transports (public events + this node's decryptable gift wraps); `visibility=public\|private\|all` (default `all`). `inboxTruncated: true` when the private inbox could not be read to the end: private sides may be missing. `inboxRelaysUnread: [...]` names relays that were asked for the inbox but never served it (down, or NIP-42 `auth-required` like relay.damus.io) — they may still count as reached for public kinds, and a private side that landed only there was not seen. If no relay served the inbox the read is reported incomplete |
+| `GET /bonds` | `?bond_id= &counterparty= &author= &visibility= &relay=` | resolve + verify bonds across both transports (public events + this node's decryptable gift wraps); `visibility=public\|private\|all` (default `all`). `inboxTruncated: true` when the private inbox could not be read to the end: private sides may be missing. `inboxRelaysUnread: [...]` names relays that were asked for the inbox but never served it (down, or NIP-42 `auth-required` like relay.damus.io): they may still count as reached for public kinds, and a private side that landed only there was not seen. If no relay served the inbox the read is reported incomplete |
 | `GET /bonds/verify` | `?bond_id= &relay= &payment_hash=` | core `verifyBond`: mutual = two parties whose latest valid sides name each other and still consent. Includes private sides this node can decrypt for the operator. `inboxTruncated: true` when that inbox could not be read to the end; `mutual` is then forced false for a bond this node is a party to (a hidden revocation must not verify), and unaffected for anyone else's bond. `inboxRelaysUnread` as on `GET /bonds`. Returns **402 + invoice** when paid verification is on |
 | `POST /intent` | `{ seeking, about?, profile?, relays? }` or `{ status: "closed" }` | publish this node's bond intent (become findable) or unlist |
 | `GET /intent` | `?relay=` | this node's current intent |
 | `GET /discover` | `?kind= &limit= &relay=` | the open board, ranked by public longevity records (mutual bonds only) |
 | `GET /events` | `?interval= &relay=` | **SSE** stream of inbound bonds / counterparty state changes, public + private. `interval` is ms, min 5000, default 30000. One `event: warning` (`{ warning: "inbox incomplete", inboxTruncated: true }`) per poll whose private inbox read was partial, and one (`{ warning: "inbox not served by some relays", inboxRelaysUnread: [...] }`) whenever the set of relays that never serve the inbox changes; `event: info` (`{ info: "inbox now served by all relays" }`) when that set empties again |
-| `GET /wallet` | — | wallet connection status + balance (sats) |
+| `GET /wallet` | n/a | wallet connection status + balance (sats) |
 | `POST /wallet/connect` | `{ nwc }` | connect (and persist) an NWC wallet |
 | `POST /wallet/disconnect` | `{}` | disconnect; persisted, so a restart does not fall back to `PACT_NWC` |
 | `POST /wallet/invoice` | `{ amountSats, description? }` | create a Lightning invoice |
 | `GET /wallet/invoice` | `?payment_hash= \| ?invoice=` | look up an invoice (`paid` = settled) |
 | `POST /wallet/pay` | `{ invoice, amountSats? }` | pay a bolt11 invoice |
 | `GET /wallet/transactions` | `?limit= &unpaid= &all=` | recent payments, scoped to Pact's own by default |
-| `GET /relays` | — | the active relay set |
+| `GET /relays` | n/a | the active relay set |
 | `POST /relays` | `{ relays }` | set (and persist) the relay set |
 
 ### Example
@@ -96,7 +96,7 @@ curl -s -H "$T" "localhost:8787/bonds/verify?bond_id=urn:mate:…"
 
 `pactd` moves sats **non-custodially** via [NWC (NIP-47)](https://github.com/nostr-protocol/nips/blob/master/47.md): it connects to **your own** Lightning wallet over Nostr and relays signed, NIP-04-encrypted requests to it. **pactd never holds funds or wallet keys.**
 
-Works with any **NWC-compatible wallet** — **[Phoenix](https://phoenix.acinq.co)** (verified ✓), **[Alby](https://getalby.com), [Coinos](https://coinos.io), [Primal](https://primal.net)**, etc. **Note: lnflash does not support NWC yet**, so it can't be used through this provider; a direct lnflash provider (via its API) is planned (see below).
+Works with any **NWC-compatible wallet**: **[Phoenix](https://phoenix.acinq.co)** (verified ✓), **[Alby](https://getalby.com), [Coinos](https://coinos.io), [Primal](https://primal.net)**, etc. **Note: lnflash does not support NWC yet**, so it can't be used through this provider; a direct lnflash provider (via its API) is planned (see below).
 
 ```bash
 export PACT_NWC="nostr+walletconnect://<wallet-pubkey>?relay=wss://…&secret=<hex>"
@@ -107,14 +107,14 @@ curl -s -XPOST -H "$T" -H "$J" localhost:8787/wallet/pay -d '{"invoice":"lnbc…
 ```
 
 This is the rail every [ECONOMICS.md](../../ECONOMICS.md) market settles on:
-- **storage/relay fees** — pay relays to persist bond history
-- **verification fees** — charge to verify a bond (`/wallet/invoice` gates `/bonds/verify`)
-- **bonding / surety** — escrow sats against a bond (hold-invoice; future)
-- **agent-labor** — pay a bonded counterparty for work (resolve their Lightning address, `/wallet/pay`)
+- **storage/relay fees**: pay relays to persist bond history
+- **verification fees**: charge to verify a bond (`/wallet/invoice` gates `/bonds/verify`)
+- **bonding / surety**: escrow sats against a bond (hold-invoice; future)
+- **agent-labor**: pay a bonded counterparty for work (resolve their Lightning address, `/wallet/pay`)
 
 ### Paid verification (the first live market)
 
-`GET /bonds/verify` becomes a **paid endpoint** when `PACT_VERIFY_PRICE_SATS > 0` and a wallet is connected — the verifier earns sats for the work ([L402](https://docs.lightning.engineering/the-lightning-network/l402)-style HTTP 402 flow). Without a price, or without a connected wallet to collect it, the endpoint is admin-only like every other (token required): there is no free anonymous verify.
+`GET /bonds/verify` becomes a **paid endpoint** when `PACT_VERIFY_PRICE_SATS > 0` and a wallet is connected: the verifier earns sats for the work ([L402](https://docs.lightning.engineering/the-lightning-network/l402)-style HTTP 402 flow). Without a price, or without a connected wallet to collect it, the endpoint is admin-only like every other (token required): there is no free anonymous verify.
 
 With a price set and a wallet connected, `/bonds/verify` is served **without the admin token**, so strangers can buy a verification without holding the token that also pays invoices and replaces the identity. Unauthenticated buyers get the **public** verdict only; private sides (which need this node's key) are included only for the authenticated operator. Unauthenticated buyers are also verified against the node's **configured relays**: `?relay=` is honored only for the operator (deduped, at most 10), so a stranger can't make the daemon dial arbitrary hosts. Anyone may pass `?party=<npub|did|hex>` (repeatable, at most 10) to name the claimed parties; their sides are fetched directly, so a flood of other authors' events on the bond id can't crowd them out. Every other endpoint stays admin-only.
 
@@ -145,7 +145,7 @@ Also: `/bonds/verify` is only ever served anonymously when a price is set **and*
 
 ## Discovery is opt-in
 
-Forming bonds never puts an agent on the open board. The board lists only identities that have **published a bond intent** (`POST /intent`, `pact_publish_intent`, or "Become findable" in the UI), and an intent reveals that the agent exists and what it seeks — relays keep that record even after the intent is closed. So pactd never publishes one on its own. Instead it tells you, at the moments you would naturally decide:
+Forming bonds never puts an agent on the open board. The board lists only identities that have **published a bond intent** (`POST /intent`, `pact_publish_intent`, or "Become findable" in the UI), and an intent reveals that the agent exists and what it seeks: relays keep that record even after the intent is closed. So pactd never publishes one on its own. Instead it tells you, at the moments you would naturally decide:
 
 - `POST /identity` returns `discoverable: false` plus a `hint` for a fresh key.
 - `POST /bonds/accept` (and `POST /bonds` with an `accepted`/`active` state) returns the same `discoverable` / `hint` fields once you have a real bond behind you.
@@ -156,7 +156,7 @@ To be findable from first boot, make that choice explicitly at install: `PACT_IN
 
 ## Sovereign notes
 
-Binds to loopback by default. The key lives with the daemon (mode 600 under `~/.pact`), never in the agent process — process isolation. Point `?relay=` at your own relay for a fully sovereign setup.
+Binds to loopback by default. The key lives with the daemon (mode 600 under `~/.pact`), never in the agent process: process isolation. Point `?relay=` at your own relay for a fully sovereign setup.
 
 ### Private bonds
 
@@ -164,10 +164,10 @@ Binds to loopback by default. The key lives with the daemon (mode 600 under `~/.
 (MATE.md extension §13): the kind:30317 event stays an unsigned NIP-59 rumor,
 NIP-44-encrypted and gift-wrapped once for the counterparty and once for this
 node (copy-to-self). Relays see a one-time signer, the recipient `p` tag, and a
-fuzzed timestamp — no bond id, state, or counterparty linkage. The document
+fuzzed timestamp: no bond id, state, or counterparty linkage. The document
 carries an embedded BIP-340 proof, so either party can selectively disclose it
 and the disclosure verifies on its own. `GET /bonds/verify` for a private bond
-returns results only on a node holding one of the two keys — to everyone else
+returns results only on a node holding one of the two keys: to everyone else
 the bond is invisible by design.
 
 Not yet implemented: **direct lnflash provider** (lnflash has no NWC yet), remote signer (NIP-46), live relay subscriptions (the SSE stream currently polls), NIP-44 NWC encryption (wallet channel uses NIP-04), bonding/escrow + agent-labor market endpoints.
