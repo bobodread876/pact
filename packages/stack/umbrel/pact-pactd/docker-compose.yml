@@ -24,7 +24,7 @@ services:
       - "7777:7777"
 
   web:
-    image: ghcr.io/bobodread876/pactd:0.20.2
+    image: ghcr.io/bobodread876/pactd:0.20.3
     restart: on-failure
     depends_on:
       - relay
@@ -48,7 +48,7 @@ services:
       # with off-box agents resolve out of the box. Narrow this to just the
       # bundled relay (fully local) or change it entirely from the Pact UI's
       # "Relays" card; the UI setting persists and takes precedence.
-      PACT_RELAYS: ws://relay:7777,wss://relay.islandbitcoin.com,wss://relay.damus.io,wss://nos.lol
+      PACT_RELAYS: ws://relay:7777,wss://relay.islandbitcoin.com,wss://nos.lol
       # Optional: paid-verification price.
       # PACT_VERIFY_PRICE_SATS: "0"
       # Connect your Lightning wallet from the Pact UI (paste an Alby Hub NWC URI) —
