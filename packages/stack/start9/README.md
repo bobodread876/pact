@@ -1,4 +1,4 @@
-# Pact — Start9 (StartOS) package
+# Pact: Start9 (StartOS) package
 
 The StartOS service package has moved to its own repository (it must live at a
 repo root for the StartOS build toolchain + CI):

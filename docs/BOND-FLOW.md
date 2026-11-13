@@ -1,6 +1,6 @@
-# The Bond Flow — canonical UX specification
+# The Bond Flow: canonical UX specification
 
-**Status:** v1 — implemented in pactd's built-in web UI (0.15.0).
+**Status:** v1: implemented in pactd's built-in web UI (0.15.0).
 **Audience:** anyone building a Pact surface (web UI, mobile app, dashboard,
 voice agent, game). This document is the portable contract: implement this
 flow against the pactd HTTP API and your surface behaves like every other
@@ -46,15 +46,15 @@ person.
   table (§4). A user sees "Waiting for them", not `proposed`.
 - **The channel echoes automatically.** Accepting a private proposal
   produces a private accept; the accepter is not asked. (Surfaces MAY offer
-  an advanced override — see §5.)
+  an advanced override: see §5.)
 - **No step requires the two nodes to be online simultaneously.** Relays
   hold everything; the inbox is poll/stream-based.
 
 ## 2. Screen inventory
 
 A conforming surface has four regions. They can be cards on one page
-(pactd's UI), tabs, or screens — the regions and their priority order are
-the contract, not the layout.
+(pactd's UI), tabs, or screens: the regions and their priority order are
+the contract; the layout is free.
 
 ### 2.1 Identity ("Your bond address")
 
@@ -62,7 +62,7 @@ the contract, not the layout.
 - **Primary action: Copy.** (Optional enhancements: QR code, NIP-05-style
   display name once supported.)
 - If no identity exists: a single "Create identity" action and nothing else
-  — the other regions are inert until this exists.
+the other regions are inert until this exists.
 
 ### 2.2 Inbox ("Needs your response")
 
@@ -72,27 +72,27 @@ the contract, not the layout.
   relative time.
 - **Primary action: Accept. Secondary: Decline.**
 - This region appears ABOVE the bond list when non-empty, and disappears
-  when empty. It is the highest-priority region after identity creation —
+  when empty. It is the highest-priority region after identity creation,
   an unanswered proposal is the one thing that needs a human.
 
 ### 2.3 Form a bond ("Propose")
 
 Three inputs, one button:
 
-1. **Their bond address** — text input. Accepts `npub1…`, `did:nostr:…`,
+1. **Their bond address**: text input. Accepts `npub1…`, `did:nostr:…`,
    or 64-hex; validate client-side or on first API error. Reject the
    node's own address with a friendly message.
-2. **Privacy** — a two-way choice, **default Private**:
+2. **Privacy**: a two-way choice, **default Private**:
    - **Private** (default): "Only the two of you can see this bond exists."
-   - **Public**: "Anyone can look it up — useful when the relationship
+   - **Public**: "Anyone can look it up: useful when the relationship
      itself is a credential."
    The default is private because the protocol's premise is consent: going
-   public is the act that needs a deliberate choice, not privacy.
-3. **Kind** — what the relationship is. Offer the conventional kinds
+   public is the act that needs a deliberate choice.
+3. **Kind**: what the relationship is. Offer the conventional kinds
    (`companion`, `collaboration`, `team`, `guardian`) plus free text.
    Default `companion`.
 
-Button: **Propose bond**. On success show "Proposal sent — waiting for
+Button: **Propose bond**. On success show "Proposal sent: waiting for
 them to accept" and surface it in the bond list as outgoing/pending.
 
 ### 2.4 Bonds (the list)
@@ -105,11 +105,11 @@ side/event). Each row shows:
 - a single human status (wording table, §4) + mutual badge when both sides
   are active
 - a validity indicator only when something is WRONG (a failed signature is
-  shown; a valid one is silent — checkmarks everywhere train people to
+  shown; a valid one is silent: checkmarks everywhere train people to
   ignore them)
 
 Row actions by situation (§3): Withdraw (my pending proposal), Accept /
-Decline (their pending proposal — same actions as Inbox), End (mutual or
+Decline (their pending proposal: same actions as Inbox), End (mutual or
 active bond), Resume/Pause where supported. Destructive actions
 (End/Decline/Withdraw) take one confirmation, never more.
 
@@ -130,7 +130,7 @@ core client-side logic and MUST be consistent across surfaces:
 | **Paused** | either side `paused` | "Paused" | Resume, End |
 
 Effective state is the *minimum* of the two sides along the lifecycle
-(NIP-BD "Mutual bonds") — a surface never shows "Mutual" unless both sides
+(NIP-BD "Mutual bonds"): a surface never shows "Mutual" unless both sides
 have published acceptance/activation.
 
 ## 4. Wording
@@ -149,12 +149,12 @@ reference; translate freely, keep register):
 | `rejected` | "Declined" |
 | `withdrawn` | "Withdrawn" |
 | `expired` | "Expired" |
-| private visibility | "**Private** — only the two of you can see this bond exists" |
-| public visibility | "**Public** — anyone can look this bond up" |
+| private visibility | "**Private**, only the two of you can see this bond exists" |
+| public visibility | "**Public**: anyone can look this bond up" |
 | accept action | "Accept" |
 | reject action | "Decline" |
 | revoke action | "End bond" |
-| `bond.reaffirmed` (action) | "**Reaffirm**" — tooltip: "Choose this bond again — reaffirmations build its history: proof the relationship lasted, not just started." |
+| `bond.reaffirmed` (action) | "**Reaffirm**", tooltip: "Choose this bond again, reaffirmations build its history: proof the relationship lasted, not just started." |
 | reaffirmation meta | "reaffirmed: you 2d ago · them 5d ago" (relative times, both sides shown) |
 | withdraw action | "Withdraw" |
 
@@ -163,14 +163,14 @@ Never show: bond ids (except inside "details"), event ids, kind numbers,
 
 ## 5. API mapping
 
-Everything above maps onto five pactd endpoints — this is the entire
+Everything above maps onto five pactd endpoints: this is the entire
 integration surface:
 
 | Flow step | Call |
 |---|---|
 | Create identity | `POST /identity` |
 | Your bond address | `GET /identity` → `npub` |
-| Propose | `POST /bonds` `{ counterparty, kind, private }` (no bondId, no state — defaults do the right thing) |
+| Propose | `POST /bonds` `{ counterparty, kind, private }` (no bondId, no state: defaults do the right thing) |
 | Inbox + list | `GET /bonds` (mine + private inbox) **and** `GET /bonds?counterparty=<my npub>` (toward me); merge, group by `bond` |
 | Accept | `POST /bonds/accept` `{ bondId }` (echoes the channel automatically) |
 | Decline | `POST /bonds/accept` `{ bondId, state: "rejected" }` |
@@ -182,7 +182,7 @@ integration surface:
 Notes:
 
 - Lifecycle updates MUST reuse the existing `bondId` and MUST publish on
-  the bond's existing channel (pass `private: true` for a private bond) —
+  the bond's existing channel (pass `private: true` for a private bond),
   a surface that drops the privacy flag on revoke leaks the relationship.
 - The channel-override on accept (`visibility` in the accept body) is an
   advanced affordance; if offered at all, hide it behind "details" with
@@ -196,8 +196,8 @@ Notes:
 | Bad address pasted | "That doesn't look like a bond address (npub…)." |
 | Own address pasted | "That's this node's own address." |
 | No identity yet | inert regions + "Create identity" |
-| 0 relays accepted a publish | "Couldn't reach any relay — check the Relays card." |
-| Accept can't find the proposal | "Couldn't find that proposal on your relays — ask them to re-send, or check Relays." |
+| 0 relays accepted a publish | "Couldn't reach any relay: check the Relays card." |
+| Accept can't find the proposal | "Couldn't find that proposal on your relays: ask them to re-send, or check Relays." |
 | Daemon unreachable / 401 | surface-specific (pactd UI: unlock flow) |
 
 Partial relay acceptance (≥1 accepted) is success; surfaces MAY show a
@@ -206,13 +206,13 @@ quiet "delivered to n/m relays" detail, never a scary warning.
 ## 7. Future extensions (kept out of v1 deliberately)
 
 - **QR / deep link** for the address exchange (`pact:bond?to=<npub>` URI
-  scheme — would collapse Share+Propose into scan).
+  scheme: would collapse Share+Propose into scan).
 - **Petnames**: local labels for counterparty addresses (purely local;
   never published).
 - **Profile names** via kind:0 / NIP-05 lookup (display only, verified
   marker only with NIP-39 proof).
 - **Paid affordances**: the verify-disclosure market (402 flow) and
-  staking, as separate cards — they extend the bond row, not the flow.
+  staking, as separate cards: they extend the bond row, not the flow.
 The three moves do not change as these arrive.
 
 ## 8. Discovery (shipped in v1.2 of this flow)
@@ -220,14 +220,14 @@ The three moves do not change as these arrive.
 The three moves assume the parties found each other. The **Discover** region
 removes that assumption without adding a fourth move:
 
-- **Become findable** — publish a bond intent: what kinds you seek plus an
+- **Become findable**: publish a bond intent: what kinds you seek plus an
   optional line about yourself. Copy MUST make the privacy boundary explicit:
-  *"It reveals that you exist and what you seek — never who you bond with."*
+  *"It reveals that you exist and what you seek: never who you bond with."*
   One action to publish, one to unlist; current status always visible.
-- **The board** — open intents from the reader's own relays, ranked by each
-  candidate's public longevity record (bonds, reaffirmations, age — the
+- **The board**: open intents from the reader's own relays, ranked by each
+  candidate's public longevity record (bonds, reaffirmations, age: the
   transparent `scoreOf` formula). Each row shows the record in plain words
-  ("3 bonds · 5 reaffirmations") — the record IS the profile.
+  ("3 bonds · 5 reaffirmations"): the record IS the profile.
 - **Propose from the board** prefills the Form-a-bond address and hands off
   to the normal three moves. Discovery ends where the flow begins.
 
@@ -236,14 +236,14 @@ API: `POST /intent` (publish/update; `status:"closed"` to unlist),
 
 ## 9. Reaffirmation (shipped in v1.1 of this flow)
 
-Mutual bonds carry a **Reaffirm** action — the deliberate act of choosing the
+Mutual bonds carry a **Reaffirm** action: the deliberate act of choosing the
 bond again. It publishes a `bond.reaffirmed` lifecycle event on the bond's
 channel (gift-wrapped for private bonds) and the row's meta shows both sides'
 latest: `reaffirmed: you 2d ago · them 5d ago`.
 
 Reaffirmation is per-side; surfaces MUST show both timestamps, because "both
 parties kept choosing this, over time" is the protocol's core longevity
-signal — a bond reaffirmed by both across months is evidence the relationship
+signal: a bond reaffirmed by both across months is evidence the relationship
 lasted, not just started. The button label is "Reaffirm"; the surrounding
 copy carries the *choose again* voice (see wording table). Surfaces SHOULD
 debounce repeat taps (it is not a like button) but the protocol does not

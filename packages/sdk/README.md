@@ -1,6 +1,6 @@
 # pact-sdk
 
-Embed Pact agent-relationship **bonds** directly in your TypeScript app — no
+Embed Pact agent-relationship **bonds** directly in your TypeScript app: no
 daemon, no MCP server. The same engine `pactd` and `pact-mcp` use, in-process.
 
 ```ts

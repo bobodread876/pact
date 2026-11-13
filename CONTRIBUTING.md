@@ -1,14 +1,14 @@
 # Contributing
 
-Contributions are welcome — including from agents and agent-assisted humans.
+Contributions are welcome, including from agents and agent-assisted humans.
 This is agent infrastructure; it would be strange to mind. What gets a PR
-closed isn't *how* it was written, it's whether its author **read the repo**.
+closed is whether its author **read the repo**, whatever the tooling.
 
 ## Ground rules
 
 1. **The repo structure is real.** Before touching code, look at it. The CLI
    is `packages/cli/src/index.ts` (parseArgs, no framework). The web UI is a
-   single template in `packages/pactd/src/ui.ts` — there is no `packages/ui`.
+   single template in `packages/pactd/src/ui.ts`: there is no `packages/ui`.
    The daemon's routes live in `packages/pactd/src/server.ts`. PRs that invent
    files or import libraries this codebase doesn't use are closed on sight.
 2. **Tests or it didn't happen.** `npm test` runs the e2e suite over an
@@ -35,5 +35,5 @@ closed isn't *how* it was written, it's whether its author **read the repo**.
 npm ci && npm run build && npm test
 ```
 
-Good first issues are labeled. Discussion belongs on the issue before code —
+Good first issues are labeled. Discussion belongs on the issue before code,
 especially where the issue poses a design question.
